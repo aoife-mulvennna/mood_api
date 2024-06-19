@@ -22,7 +22,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/api/mood', (req, res) => {
-    const query = `SELECT * FROM moods`;
+    const query = `SELECT * FROM daily_record dr INNER JOIN moods m ON m.mood_id = dr.mood_id `;
     db.query(query, function (err, rows, fields) {
         if (err) {
             console.error('Error fetching moods:', err);
