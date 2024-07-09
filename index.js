@@ -282,7 +282,23 @@ app.get('/api/mood', (req, res) => {
     })
 })
 
-app.post('/api/mood', verifyToken, (req, res) => {
+app.get('/api/socialisations', (req, res) => {
+    const query = `SELECT * FROM socialisation`;
+    db.query(query, function (err, rows, fields) {
+        if (err) {
+            console.error('Error fetching socialisations:', err);
+            res.status(500).send('Failed to fetch socialisations');
+            return;
+        }
+        if (rows.length === 0) {
+            res.status(404).send('No socialisations found');
+            return;
+        }
+        res.send(rows);
+    })
+})
+
+app.post('/api/daily-track', verifyToken, (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     console.log('Token received:', token);
@@ -297,13 +313,17 @@ app.post('/api/mood', verifyToken, (req, res) => {
             return res.status(403).send('Forbidden: Invalid token');// Forbidden
         }
 
-        const studentNumber = decoded.studentNumber;
         console.log('Decoded token:', decoded);
 
-        const { mood_name, exercise_duration, sleep_duration, socialisation } = req.body;
+        const {student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score } = req.body;
+      
+        if (!mood_id || !exercise_duration || !sleep_duration || !socialisation_id || !productivity_score) {
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
 
-        const query = `SELECT * FROM student WHERE student_number = ?`;
-        db.query(query, [studentNumber], async (err, results) => {
+
+        const query = `SELECT * FROM student WHERE student_id = ?`;
+        db.query(query, [student_id], async (err, results) => {
             if (err) {
                 console.error('Error fetching user:', err);
                 res.status(500).send('Error occurred');
@@ -313,10 +333,11 @@ app.post('/api/mood', verifyToken, (req, res) => {
             if (results.length === 0) {
                 // User not found
                 res.status(401).send('Invalid credentials');
+                console.log('user not found');
                 return;
             }
 
-            const student_id = results[0].student_id;
+        //    const student_id = results[0].student_id;
 
             // Check if the student has already submitted a record for today
             const today = new Date().toISOString().split('T')[0];
@@ -336,26 +357,26 @@ app.post('/api/mood', verifyToken, (req, res) => {
                     return res.status(409).json({ message: 'Already tracked today' });
                 }
 
-                const getMoodIdQuery = 'SELECT mood_id FROM moods WHERE mood_name = ?';
-                db.query(getMoodIdQuery, [mood_name], (err, moodResult) => {
-                    if (err) {
-                        console.error('Error fetching mood_id:', err);
-                        res.status(500).json({ message: 'Failed to fetch mood_id' });
-                        return;
-                    }
+                // const getMoodIdQuery = 'SELECT mood_id FROM moods WHERE mood_name = ?';
+                // db.query(getMoodIdQuery, [mood_name], (err, moodResult) => {
+                //     if (err) {
+                //         console.error('Error fetching mood_id:', err);
+                //         res.status(500).json({ message: 'Failed to fetch mood_id' });
+                //         return;
+                //     }
 
-                    if (moodResult.length === 0) {
-                        res.status(404).json({ message: 'Mood not found' });
-                        return;
-                    }
+                //     if (moodResult.length === 0) {
+                //         res.status(404).json({ message: 'Mood not found' });
+                //         return;
+                //     }
 
-                    const mood_id = moodResult[0].mood_id;
+                //     const mood_id = moodResult[0].mood_id;
 
                     const insertQuery = `
-            INSERT INTO daily_record (student_id, mood_id, exercise_duration, sleep_duration, socialisation) 
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO daily_record (student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score) 
+            VALUES (?, ?, ?, ?, ?, ?)
         `;
-                    db.query(insertQuery, [student_id, mood_id, exercise_duration, sleep_duration, socialisation], (err, rows) => {
+                    db.query(insertQuery, [student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score], (err, rows) => {
                         if (err) {
                             console.error('Error inserting mood:', err);
                             res.status(500).json({ message: 'Failed to add mood' });
@@ -367,7 +388,7 @@ app.post('/api/mood', verifyToken, (req, res) => {
             });
         });
     });
-});
+// });
 
 app.post('/api/logout', (req, res) => {
     // Simply return a success response indicating logout
@@ -518,6 +539,8 @@ app.get('/api/mood/status', verifyToken, (req, res) => {
 //         });
 //     });
 // })
+const cooldownPeriodSeconds = 1 * 60 * 60;
+
 app.post('/api/quick-track', verifyToken, (req, res) => {
     const studentId = req.user.student_id; // Ensure this line correctly retrieves student_id
     const { mood_id } = req.body;
@@ -527,22 +550,46 @@ app.post('/api/quick-track', verifyToken, (req, res) => {
         return res.status(400).json({ error: 'Student ID is missing or invalid' });
     }
 
-    // Example insert query
-    const insertQuery = `
-        INSERT INTO quick_track (student_id, mood_id, timestamp)
-        VALUES (?, ?, NOW())
+    const checkLastSubmissionQuery = `SELECT quick_track_timestamp FROM quick_track 
+                                        WHERE student_id = ? 
+                                        ORDER BY quick_track_timestamp DESC 
+                                        LIMIT 1`;
+
+    db.query(checkLastSubmissionQuery, [studentId], (err, results) => {
+        if (err) {
+            console.error('Error checking last submission:', err);
+            return res.status(500).json({ error: 'Failed to check last submission' });
+        }
+
+        if (results.length > 0) {
+            const lastSubmissionTime = results[0].quick_track_timestamp;
+            const now = new Date();
+            const cooldownEndTime = new Date(lastSubmissionTime.getTime() + cooldownPeriodSeconds * 1000);
+
+            if (now < cooldownEndTime) {
+                // Calculate remaining time in seconds
+                const remainingSeconds = Math.floor((cooldownEndTime - now) / 1000);
+                return res.status(409).json({
+                    message: 'Cooldown period active',
+                    remainingTimeSeconds: remainingSeconds
+                });
+            }
+        }
+
+        const insertQuery = `
+        INSERT INTO quick_track (student_id, mood_id )
+        VALUES (?, ?)
     `;
 
-    db.query(insertQuery, [studentId, mood_id], (err, result) => {
-        if (err) {
-            console.error('Error inserting quick track:', err);
-            return res.status(500).json({ error: 'Failed to add quick track' });
-        }
-        res.json({ message: 'Quick track added successfully' });
+        db.query(insertQuery, [studentId, mood_id], (err, result) => {
+            if (err) {
+                console.error('Error inserting quick track:', err);
+                return res.status(500).json({ error: 'Failed to add quick track' });
+            }
+            res.json({ message: 'Quick track added successfully' });
+        });
     });
 });
-
-
 
 app.listen(8000, () => {
     console.log('server is running on port 8000')
