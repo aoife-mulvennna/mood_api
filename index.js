@@ -299,106 +299,119 @@ app.get('/api/socialisations', (req, res) => {
 })
 
 app.post('/api/daily-track', verifyToken, (req, res) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    console.log('Token received:', token);
+    const studentId = req.user.id;
+    const { mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score } = req.body;
 
-    if (!token) {
-        return res.status(401).send('Unauthorized: No token provided'); // Unauthorized
+    if (!mood_id || !exercise_duration || !sleep_duration || !socialisation_id || !productivity_score) {
+        return res.status(400).json({ message: 'Missing required fields' });
     }
 
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    const today = new Date().toISOString().split('T')[0];
+
+    const checkRecordQuery = `
+        SELECT * FROM daily_record 
+        WHERE student_id = ? AND DATE(daily_record_timestamp) = ?
+    `;
+
+    db.query(checkRecordQuery, [studentId, today], (err, records) => {
         if (err) {
-            console.error('JWT verification error:', err);
-            return res.status(403).send('Forbidden: Invalid token');// Forbidden
+            console.error('Error checking daily record:', err);
+            return res.status(500).send('Failed to check daily record');
         }
 
-        console.log('Decoded token:', decoded);
-
-        const {student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score } = req.body;
-      
-        if (!mood_id || !exercise_duration || !sleep_duration || !socialisation_id || !productivity_score) {
-            return res.status(400).json({ message: 'Missing required fields' });
+        if (records.length > 0) {
+            return res.status(409).json({ message: 'Already tracked today' });
         }
 
-
-        const query = `SELECT * FROM student WHERE student_id = ?`;
-        db.query(query, [student_id], async (err, results) => {
-            if (err) {
-                console.error('Error fetching user:', err);
-                res.status(500).send('Error occurred');
-                return;
-            }
-
-            if (results.length === 0) {
-                // User not found
-                res.status(401).send('Invalid credentials');
-                console.log('user not found');
-                return;
-            }
-
-        //    const student_id = results[0].student_id;
-
-            // Check if the student has already submitted a record for today
-            const today = new Date().toISOString().split('T')[0];
-            const checkRecordQuery = `
-                 SELECT * FROM daily_record 
-                 WHERE student_id = ? AND DATE(daily_record_timestamp) = ?
-             `;
-            db.query(checkRecordQuery, [student_id, today], (err, records) => {
-                if (err) {
-                    console.error('Error checking daily record:', err);
-                    res.status(500).send('Failed to check daily record');
-                    return;
-                }
-
-                if (records.length > 0) {
-                    // User has already tracked for today
-                    return res.status(409).json({ message: 'Already tracked today' });
-                }
-
-                // const getMoodIdQuery = 'SELECT mood_id FROM moods WHERE mood_name = ?';
-                // db.query(getMoodIdQuery, [mood_name], (err, moodResult) => {
-                //     if (err) {
-                //         console.error('Error fetching mood_id:', err);
-                //         res.status(500).json({ message: 'Failed to fetch mood_id' });
-                //         return;
-                //     }
-
-                //     if (moodResult.length === 0) {
-                //         res.status(404).json({ message: 'Mood not found' });
-                //         return;
-                //     }
-
-                //     const mood_id = moodResult[0].mood_id;
-
-                    const insertQuery = `
+        const insertQuery = `
             INSERT INTO daily_record (student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score) 
             VALUES (?, ?, ?, ?, ?, ?)
         `;
-                    db.query(insertQuery, [student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score], (err, rows) => {
+
+        db.query(insertQuery, [studentId, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score], (err) => {
+            if (err) {
+                console.error('Error inserting daily record:', err);
+                return res.status(500).json({ message: 'Failed to add daily record' });
+            }
+
+            const getStreakQuery = `
+                SELECT * FROM streak 
+                WHERE student_id = ?
+            `;
+
+            db.query(getStreakQuery, [studentId], (err, streaks) => {
+                if (err) {
+                    console.error('Error fetching streak:', err);
+                    return res.status(500).json({ message: 'Failed to fetch streak' });
+                }
+
+                const currentDate = new Date();
+                let streakValue = 1;
+                let lastRecordDate = currentDate;
+
+                if (streaks.length > 0) {
+                    const streak = streaks[0];
+                    const lastRecord = new Date(streak.last_record);
+                    const oneDay = 24 * 60 * 60 * 1000;
+
+                    if (currentDate - lastRecord <= oneDay) {
+                        streakValue = streak.streak_value + 1;
+                    } else {
+                        streakValue = 1; // Reset streak if more than a day has passed
+                    }
+
+                    lastRecordDate = currentDate;
+
+                    const updateStreakQuery = `
+                        UPDATE streak 
+                        SET streak_value = ?, last_record = ? 
+                        WHERE student_id = ?
+                    `;
+
+                    db.query(updateStreakQuery, [streakValue, lastRecordDate, studentId], (err) => {
                         if (err) {
-                            console.error('Error inserting mood:', err);
-                            res.status(500).json({ message: 'Failed to add mood' });
-                            return;
+                            console.error('Error updating streak:', err);
+                            return res.status(500).json({ message: 'Failed to update streak' });
                         }
-                        res.json({ message: 'Added record successfully' });
+
+                        return res.json({ message: 'Daily record and streak updated successfully', streakValue });
                     });
-                });
+                } else {
+                    const insertStreakQuery = `
+                        INSERT INTO streak (streak_value, student_id, last_record) 
+                        VALUES (?, ?, ?)
+                    `;
+
+                    db.query(insertStreakQuery, [streakValue, studentId, lastRecordDate], (err) => {
+                        if (err) {
+                            console.error('Error inserting streak:', err);
+                            return res.status(500).json({ message: 'Failed to add streak' });
+                        }
+
+                        return res.json({ message: 'Daily record and streak added successfully', streakValue });
+                    });
+                }
             });
         });
     });
-// });
+});
+
 
 app.post('/api/logout', (req, res) => {
     // Simply return a success response indicating logout
     res.json({ message: 'Logged out successfully' });
 });
 
-// Route to fetch student details for logged-in student
 app.get('/api/student-details/:student_id', verifyToken, (req, res) => {
-    const studentId = req.params.student_id;
-    const query = 'SELECT * FROM student WHERE student_id = ?';
+    const studentId = req.params.student_id; // Use req.params to get the student_id from the URL
+    console.log('Student Id is ' + studentId);
+    const query = `
+      SELECT student_number, student_name, student_email, course_name, academic_year_name AS academic_year
+      FROM student 
+      JOIN course ON student.course_id = course.course_id 
+      JOIN academic_year ON student.course_year_id = academic_year.academic_year_id 
+      WHERE student_id = ?`;
+
     db.query(query, [studentId], (err, results) => {
         if (err) {
             console.error('Error fetching student details:', err);
@@ -407,10 +420,13 @@ app.get('/api/student-details/:student_id', verifyToken, (req, res) => {
         if (results.length === 0) {
             return res.status(404).json({ error: 'Student not found' });
         }
+        console.log('Student Details:', results[0]);
         const studentDetails = results[0];
         res.json(studentDetails);
     });
 });
+
+
 
 app.get('/api/staff-details/:staff_id', verifyToken, (req, res) => {
     const staffId = req.params.staff_id;
@@ -428,65 +444,36 @@ app.get('/api/staff-details/:staff_id', verifyToken, (req, res) => {
     });
 });
 
-
-app.get('/api/streak', verifyToken, (req, res) => {
+app.get('/api/streak/:student_id', verifyToken, (req, res) => {
     const studentId = req.params.student_id;
-    // Calculate streak using SQL query
-    const streakQuery = `
-SELECT
-    student_id,
-    MAX(current_streak) AS current_streak
-FROM
-    (
-        SELECT
-            student_id,
-            daily_record_timestamp,
-            CASE
-                WHEN @prev_date := DATE_SUB(daily_record_timestamp, INTERVAL 1 DAY) THEN
-                    IF(@prev_date = @expected_date, @streak := @streak + 1, @streak := 1)
-                ELSE
-                    @streak := 1
-            END AS current_streak,
-            @expected_date := daily_record_timestamp
-        FROM
-            (
-                -- Get all records for the last 30 days for a specific student
-                SELECT
-                    dr.student_id,
-                    dr.daily_record_timestamp
-                FROM
-                    daily_record dr
-                JOIN
-                    student s ON dr.student_id = s.student_id
-                WHERE
-                    s.student_id = ?
-                    AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-                    AND dr.daily_record_timestamp <= CURDATE()
-                ORDER BY
-                    dr.daily_record_timestamp DESC
-            ) AS ordered_records
-        CROSS JOIN
-            (SELECT @streak := 0, @prev_date := NULL, @expected_date := NULL) AS vars
-        ORDER BY
-            daily_record_timestamp DESC
-    ) AS streaks
-GROUP BY
-    student_id
-    `;
-    db.query(streakQuery, [studentId], (err, results) => {
+
+    const getStreakQuery = `
+            SELECT * FROM streak 
+            WHERE student_id = ?
+        `;
+
+    db.query(getStreakQuery, [studentId], (err, streaks) => {
         if (err) {
             console.error('Error fetching streak:', err);
-            res.status(500).json({ error: 'Failed to fetch streak' });
-            return;
+            return res.status(500).json({ message: 'Failed to fetch streak' });
         }
-        const streak = results[0] ? results[0].streak : 0;
-        res.json({ streak });
+
+        if (streaks.length > 0) {
+            return res.json({ streakValue: streaks[0].streak_value });
+        } else {
+            return res.json({ streakValue: 0 });
+        }
     });
 });
 
+
+
+
+
 app.get('/api/mood/status', verifyToken, (req, res) => {
-    const studentId = req.params.student_id; // Assuming you have student_id in your decoded JWT token
+    const studentId = req.user.student_id;
     const today = new Date().toISOString().split('T')[0];
+    console.log(`Checking records for student ID: ${studentId} on ${today}`);
 
     const query = 'SELECT * FROM daily_record WHERE student_id = ? AND DATE(daily_record_timestamp) = ?';
     db.query(query, [studentId, today], (err, results) => {
@@ -495,12 +482,15 @@ app.get('/api/mood/status', verifyToken, (req, res) => {
             return res.status(500).send('Error occurred');
         }
         if (results.length > 0) {
+            console.log('AlreadyTracked set to true');
             return res.json({ alreadyTracked: true });
         } else {
+            console.log('AlreadyTracked set to false');
             return res.json({ alreadyTracked: false });
         }
     });
 });
+
 
 // app.post('/api/quick-track', verifyToken, (req, res) => {
 //     const studentId = req.user.student_id;
@@ -590,6 +580,111 @@ app.post('/api/quick-track', verifyToken, (req, res) => {
         });
     });
 });
+
+// Check if student exists based on student number or email
+app.get('/api/check-student', async (req, res) => {
+    const { identifier } = req.query;
+    const query = `
+    SELECT * FROM student
+    WHERE student_number = ? OR student_email = ?
+  `;
+    db.query(query, [identifier, identifier], (err, results) => {
+        if (err) {
+            console.error('Error checking student existence:', err);
+            return res.status(500).json({ error: 'Failed to check student existence' });
+        }
+        if (results.length > 0) {
+            return res.json({ exists: true });
+        }
+        res.json({ exists: false });
+    });
+});
+
+app.get('/api/records/:student_id', verifyToken, (req, res) => {
+    const studentId = req.params.student_id;
+
+    const getRecordsQuery = `
+           SELECT * FROM daily_record dr 
+  JOIN moods m ON m.mood_id = dr.mood_id
+  JOIN socialisation s ON s.socialisation_id = dr.socialisation_id
+            WHERE dr.student_id = ?
+            ORDER BY daily_record_timestamp DESC
+        `;
+
+    db.query(getRecordsQuery, [studentId], (err, records) => {
+        if (err) {
+            console.error('Error fetching records:', err);
+            return res.status(500).json({ message: 'Failed to fetch records' });
+        }
+
+        return res.json({ records });
+    });
+});
+
+app.get('/api/quick-tracker/:student_id', verifyToken, (req, res) => {
+    const studentId = req.params.student_id;
+
+    const getQuickTrackerQuery = `
+        SELECT * FROM quick_track 
+        JOIN moods ON moods.mood_id = quick_track.mood_id
+        WHERE student_id = ?
+        ORDER BY quick_track_timestamp DESC
+    `;
+
+    db.query(getQuickTrackerQuery, [studentId], (err, records) => {
+        if (err) {
+            console.error('Error fetching quick tracker records:', err);
+            return res.status(500).json({ message: 'Failed to fetch quick tracker records' });
+        }
+
+        return res.json({ records });
+    });
+});
+
+app.get('/api/assignments/:student_id', verifyToken, (req, res) => {
+    const studentId = req.params.student_id;
+
+    const getAssignmentsQuery = `
+        SELECT *
+        FROM assignment 
+        WHERE student_id = ?
+        ORDER BY assignment_deadline ASC
+    `;
+
+    db.query(getAssignmentsQuery, [studentId], (err, assignments) => {
+        if (err) {
+            console.error('Error fetching assignments:', err);
+            return res.status(500).json({ message: 'Failed to fetch assignments' });
+        }
+
+        return res.json({ assignments });
+    });
+});
+
+app.delete('/api/assignments/:assignment_id', verifyToken, (req, res) => {
+    const assignmentId = req.params.assignment_id;
+
+    const deleteAssignmentQuery = `
+        DELETE FROM assignment 
+        WHERE assignment_id = ? 
+    `;
+
+    db.query(deleteAssignmentQuery, [assignmentId], (err) => {
+        if (err) {
+            console.error('Error deleting assignment from assignment:', err);
+            return res.status(500).json({ message: 'Failed to delete assignment' });
+        }
+
+            res.json({ message: 'Assignment deleted successfully' });
+        });
+    });
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error('Internal server error:', err);
+    res.status(500).json({ error: 'An internal server error occurred' });
+});
+
 
 app.listen(8000, () => {
     console.log('server is running on port 8000')

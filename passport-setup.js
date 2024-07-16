@@ -73,6 +73,7 @@ passport.use('student-jwt', new JwtStrategy(
         secretOrKey: JWT_SECRET
     },
     (jwtPayload, done) => {
+        // console.log('JWT Payload:', jwtPayload); // Log the JWT payload
         db.query('SELECT * FROM student WHERE student_id = ?', [jwtPayload.id], (err, results) => {
             if (err) {
                 return done(err, false);
