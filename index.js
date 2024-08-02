@@ -1,10 +1,12 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-// const mysql = require("mysql2");
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const passport = require('passport');
+const cron = require('node-cron'); 
+const sendEmail = require('./emailUtils');
+
 require('dotenv').config();
 require('./passport-setup');
 const saltRounds = 10;
@@ -24,8 +26,41 @@ if (!JWT_SECRET) {
 }
 
 // Middleware to verify JWT token
-const verifyToken = passport.authenticate('student-jwt', { session: false });
-app.use('/api/quick-track', verifyToken);
+const verifyTokenStudent = passport.authenticate('student-jwt', { session: false });
+const verifyTokenStaff = passport.authenticate('staff-jwt', { session: false });
+
+const testEmailAddress = 'amulvenna10@qub.ac.uk';
+// Schedule a job to run every day at midnight
+cron.schedule('* * * * *', async () => {
+    try {
+        const checkQuery = `
+            SELECT student_email, student_name
+            FROM student
+            WHERE student_email = ? AND student_id NOT IN (
+                SELECT DISTINCT student_id 
+                FROM daily_record
+                WHERE daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 1 MINUTE)
+            )
+        `;
+
+        db.query(checkQuery, [testEmailAddress], async (err, results) => {
+            if (err) {
+                console.error('Error checking students:', err);
+                return;
+            }
+
+            for (const student of results) {
+                const { student_email, student_name } = student;
+                const emailMessage = `Dear ${student_name},\n\nIt seems like you haven't recorded any activities in the last 5 days. Please make sure to record your activities regularly.`;
+                sendEmail(student_email, 'Activity Reminder', emailMessage);
+            }
+        });
+    } catch (error) {
+        console.error('Error running scheduled job:', error);
+    }
+});
+
+app.use('/api/quick-track', verifyTokenStudent);
 
 app.get('/api/course-names', (req, res) => {
     const query = 'SELECT * FROM course';
@@ -52,7 +87,7 @@ app.get('/api/course-years', (req, res) => {
 });
 
 // Route to add a new student (accessible without authentication)
-app.post('/api/students', async (req, res) => {
+app.post('/api/create-student', async (req, res) => {
     const {
         student_number,
         student_name,
@@ -71,9 +106,9 @@ app.post('/api/students', async (req, res) => {
     // Query to check if student_number or student_email already exists
     const checkDuplicateQuery = `
         SELECT * FROM student
-        WHERE student_number = ? OR student_email = ?
+        WHERE student_number = ?
     `;
-    db.query(checkDuplicateQuery, [student_number, student_email], (err, results) => {
+    db.query(checkDuplicateQuery, [student_number], (err, results) => {
         if (err) {
             console.error('Error checking duplicates:', err);
             res.status(500).json({ message: 'Error occurred while checking duplicates' });
@@ -82,7 +117,7 @@ app.post('/api/students', async (req, res) => {
 
         if (results.length > 0) {
             // Found existing student with same student_number or student_email
-            res.status(409).json({ message: 'Student number or email already exists' });
+            res.status(409).json({ message: 'Student numberalready exists' });
             return;
         }
 
@@ -137,7 +172,24 @@ app.post('/api/students', async (req, res) => {
                             return;
                         }
 
-                        res.json({ message: 'Account created successfully', student_id: result.insertId });
+                        const student_id = result.insertId;
+                        const initialStreakQuery = `
+                            INSERT INTO streak (streak_value, student_id, last_record_time) 
+                            VALUES (0, ?, NOW())
+                        `;
+                        db.query(initialStreakQuery, [student_id], (err) => {
+                            if (err) {
+                                console.error('Error inserting initial streak:', err);
+                                res.status(500).json({ message: 'Failed to create initial streak' });
+                                return;
+                            }
+
+                            const emailMessage = `Hello ${student_name},\n\nYour account has been successfully created. Welcome!`;
+                            const loginLink = `${process.env.FRONTEND_URL}/login`; // Link to the login page
+                            sendEmail(student_email, 'Account Created Successfully', emailMessage, '', loginLink);
+
+                            res.json({ message: 'Account and initial streak created successfully', student_id });
+                        });
                     });
                 });
             });
@@ -145,42 +197,55 @@ app.post('/api/students', async (req, res) => {
     });
 });
 
-// app.post('/api/login/student', (req, res) => {
-//     //const { studentNumber, student_password } = req.body;
-//     const { studentNumber, studentPassword } = req.body;
-//     console.log('Login attempt for student number:', studentNumber);
-//     // Query to find the user by student number
-//     const studentQuery = `SELECT * FROM student WHERE student_number = ?`;
+app.post('/api/forgot-password', async (req, res) => {
+    const { email } = req.body;
 
-//     db.query(studentQuery, [studentNumber], async (err, studentResults) => {
-//         if (err) {
-//             console.error('Error fetching student:', err);
-//             return res.status(500).send('Error occurred');
-//         }
-//         if (studentResults.length > 0) {
-//             // Found user in student table
-//             const student = studentResults[0];
-//             console.log('Student found:', student);
-//             try {
-//                 const passwordMatch = await bcrypt.compare(studentPassword, student.student_password);
-//                 if (passwordMatch) {
-//                     const token = jwt.sign({ id: student.student_id}, JWT_SECRET, { expiresIn: '1h' });
-//                     console.log('Student login successful');
-//                     return res.json({ token });
-//                 } else {
-//                     console.log('Invalid credentials for student');
-//                     return res.status(401).send('Invalid credentials');
-//                 }
-//             } catch (error) {
-//                 console.error('Password comparison error:', error);
-//                 return res.status(500).send('Error comparing passwords');
-//             }
-//         } else {
-//             console.log('No user found with number:', studentNumber);
-//             return res.status(401).send('Invalid credentials');
-//         }
-//     });
-// });
+    const userQuery = 'SELECT * FROM student WHERE student_email = ?';
+    db.query(userQuery, [email], async (err, results) => {
+        if (err) {
+            console.error('Error fetching user:', err);
+            return res.status(500).json({ message: 'Error occurred while fetching user' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'No account found with that email' });
+        }
+
+        const user = results[0];
+        const token = jwt.sign({ id: user.student_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+        const emailMessage = `Click the following link to reset your password.`;
+        sendEmail(email, 'Password Reset Request', emailMessage, resetLink);
+
+        res.json({ token });
+    });
+});
+
+app.post('/api/reset-password', async (req, res) => {
+    const { token, password } = req.body;
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const updateQuery = 'UPDATE student SET student_password = ? WHERE student_id = ?';
+        db.query(updateQuery, [hashedPassword, decoded.id], (err, result) => {
+            if (err) {
+                console.error('Error updating password:', err);
+                return res.status(500).json({ message: 'Failed to reset password' });
+            }
+
+            res.json({ message: 'Password reset successfully' });
+        });
+    } catch (err) {
+        console.error('Invalid or expired token:', err);
+        res.status(400).json({ message: 'Invalid or expired token' });
+    }
+});
+  
+
+  
 app.post('/api/login/student', (req, res, next) => {
     passport.authenticate('student-local', { session: false }, (err, student, info) => {
         if (err) {
@@ -221,44 +286,6 @@ app.post('/api/login/staff', (req, res, next) => {
     })(req, res, next);
 });
 
-// Admin-only route to create staff accounts
-// Temporarily removing authentication and admin check for initial staff creation
-app.post('/api/staff', async (req, res) => {
-    const { staff_number, staff_name, staff_email, staff_password } = req.body;
-
-    if (!staff_email.endsWith('@qub.ac.uk')) {
-        return res.status(400).json({ message: 'Please use your QUB email address.' });
-    }
-
-    const checkDuplicateQuery = `
-        SELECT * FROM staff
-        WHERE staff_number = ? OR staff_email = ?
-    `;
-    db.query(checkDuplicateQuery, [staff_number, staff_email], async (err, results) => {
-        if (err) {
-            console.error('Error checking duplicates:', err);
-            return res.status(500).json({ message: 'Error occurred while checking duplicates' });
-        }
-
-        if (results.length > 0) {
-            return res.status(409).json({ message: 'Staff number or email already exists' });
-        }
-
-        const hashedPassword = await bcrypt.hash(staff_password, 10);
-
-        const insertQuery = `
-            INSERT INTO staff (staff_number, staff_name, staff_email, staff_password, role) 
-            VALUES (?, ?, ?, ?, 'admin')
-        `;
-        db.query(insertQuery, [staff_number, staff_name, staff_email, hashedPassword], (err, result) => {
-            if (err) {
-                console.error('Error inserting staff:', err);
-                return res.status(500).json({ message: 'Failed to add staff' });
-            }
-            res.json({ message: 'Staff account created successfully', staff_id: result.insertId });
-        });
-    });
-});
 
 
 app.get('/', (req, res) => {
@@ -298,9 +325,9 @@ app.get('/api/socialisations', (req, res) => {
     })
 })
 
-app.post('/api/daily-track', verifyToken, (req, res) => {
-    const studentId = req.user.id;
-    const { mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score } = req.body;
+app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
+
+    const { student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score } = req.body;
 
     if (!mood_id || !exercise_duration || !sleep_duration || !socialisation_id || !productivity_score) {
         return res.status(400).json({ message: 'Missing required fields' });
@@ -313,7 +340,7 @@ app.post('/api/daily-track', verifyToken, (req, res) => {
         WHERE student_id = ? AND DATE(daily_record_timestamp) = ?
     `;
 
-    db.query(checkRecordQuery, [studentId, today], (err, records) => {
+    db.query(checkRecordQuery, [student_id, today], (err, records) => {
         if (err) {
             console.error('Error checking daily record:', err);
             return res.status(500).send('Failed to check daily record');
@@ -328,7 +355,7 @@ app.post('/api/daily-track', verifyToken, (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?)
         `;
 
-        db.query(insertQuery, [studentId, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score], (err) => {
+        db.query(insertQuery, [student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score], (err) => {
             if (err) {
                 console.error('Error inserting daily record:', err);
                 return res.status(500).json({ message: 'Failed to add daily record' });
@@ -339,7 +366,7 @@ app.post('/api/daily-track', verifyToken, (req, res) => {
                 WHERE student_id = ?
             `;
 
-            db.query(getStreakQuery, [studentId], (err, streaks) => {
+            db.query(getStreakQuery, [student_id], (err, streaks) => {
                 if (err) {
                     console.error('Error fetching streak:', err);
                     return res.status(500).json({ message: 'Failed to fetch streak' });
@@ -351,11 +378,13 @@ app.post('/api/daily-track', verifyToken, (req, res) => {
 
                 if (streaks.length > 0) {
                     const streak = streaks[0];
-                    const lastRecord = new Date(streak.last_record);
+                    const lastRecord = new Date(streak.last_record_time);
                     const oneDay = 24 * 60 * 60 * 1000;
 
-                    if (currentDate - lastRecord <= oneDay) {
+                    if (currentDate - lastRecord === oneDay) {
                         streakValue = streak.streak_value + 1;
+                    } else if (currentDate - lastRecord < oneDay) {
+                        streakValue = streak.streak_value;
                     } else {
                         streakValue = 1; // Reset streak if more than a day has passed
                     }
@@ -364,11 +393,11 @@ app.post('/api/daily-track', verifyToken, (req, res) => {
 
                     const updateStreakQuery = `
                         UPDATE streak 
-                        SET streak_value = ?, last_record = ? 
+                        SET streak_value = ?, last_record_time = ? 
                         WHERE student_id = ?
                     `;
 
-                    db.query(updateStreakQuery, [streakValue, lastRecordDate, studentId], (err) => {
+                    db.query(updateStreakQuery, [streakValue, lastRecordDate, student_id], (err) => {
                         if (err) {
                             console.error('Error updating streak:', err);
                             return res.status(500).json({ message: 'Failed to update streak' });
@@ -378,11 +407,11 @@ app.post('/api/daily-track', verifyToken, (req, res) => {
                     });
                 } else {
                     const insertStreakQuery = `
-                        INSERT INTO streak (streak_value, student_id, last_record) 
+                        INSERT INTO streak (streak_value, student_id, last_record_time) 
                         VALUES (?, ?, ?)
                     `;
 
-                    db.query(insertStreakQuery, [streakValue, studentId, lastRecordDate], (err) => {
+                    db.query(insertStreakQuery, [streakValue, student_id, lastRecordDate], (err) => {
                         if (err) {
                             console.error('Error inserting streak:', err);
                             return res.status(500).json({ message: 'Failed to add streak' });
@@ -402,9 +431,8 @@ app.post('/api/logout', (req, res) => {
     res.json({ message: 'Logged out successfully' });
 });
 
-app.get('/api/student-details/:student_id', verifyToken, (req, res) => {
+app.get('/api/student-details/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id; // Use req.params to get the student_id from the URL
-    console.log('Student Id is ' + studentId);
     const query = `
       SELECT student_number, student_name, student_email, course_name, academic_year_name AS academic_year
       FROM student 
@@ -420,17 +448,73 @@ app.get('/api/student-details/:student_id', verifyToken, (req, res) => {
         if (results.length === 0) {
             return res.status(404).json({ error: 'Student not found' });
         }
-        console.log('Student Details:', results[0]);
         const studentDetails = results[0];
         res.json(studentDetails);
     });
 });
 
+app.post('/api/change-password', async (req, res) => {
+    const { userId, currentPassword, newPassword } = req.body;
+  
+    // Query to fetch the user's current hashed password
+    const getUserQuery = `SELECT student_password FROM student WHERE student_id = ?`;
+    db.query(getUserQuery, [userId], (err, results) => {
+      if (err) {
+        console.error('Error fetching user:', err);
+        res.status(500).json({ message: 'Error fetching user' });
+        return;
+      }
+  
+      if (results.length === 0) {
+        res.status(404).json({ message: 'User not found' });
+        return;
+      }
+  
+      const hashedPassword = results[0].student_password;
+  
+      // Compare the current password with the hashed password
+      bcrypt.compare(currentPassword, hashedPassword, (err, isMatch) => {
+        if (err) {
+          console.error('Error comparing passwords:', err);
+          res.status(500).json({ message: 'Error comparing passwords' });
+          return;
+        }
+  
+        if (!isMatch) {
+          res.status(401).json({ message: 'Current password is incorrect' });
+          return;
+        }
+  
+        // Hash the new password
+        bcrypt.hash(newPassword, saltRounds, (err, newHashedPassword) => {
+          if (err) {
+            console.error('Error hashing new password:', err);
+            res.status(500).json({ message: 'Error hashing new password' });
+            return;
+          }
+  
+          // Update the user's password in the database
+          const updatePasswordQuery = `UPDATE student SET student_password = ? WHERE student_id = ?`;
+          db.query(updatePasswordQuery, [newHashedPassword, userId], (err) => {
+            if (err) {
+              console.error('Error updating password:', err);
+              res.status(500).json({ message: 'Error updating password' });
+              return;
+            }
+  
+            res.json({ message: 'Password changed successfully' });
+          });
+        });
+      });
+    });
+  });
 
-
-app.get('/api/staff-details/:staff_id', verifyToken, (req, res) => {
+app.get('/api/staff-details/:staff_id', verifyTokenStaff, (req, res) => {
+    console.log('User:', req.user); // Log the user object
+    console.log('Params:', req.params); // Log the params
     const staffId = req.params.staff_id;
-    const query = 'SELECT * FROM staff WHERE staff_id = ?';
+    console.log('the staff id is: ' + staffId);
+    const query = 'SELECT staff_name FROM staff WHERE staff_id = ?';
     db.query(query, [staffId], (err, results) => {
         if (err) {
             console.error('Error fetching staff details:', err);
@@ -444,13 +528,10 @@ app.get('/api/staff-details/:staff_id', verifyToken, (req, res) => {
     });
 });
 
-app.get('/api/streak/:student_id', verifyToken, (req, res) => {
-    const studentId = req.params.student_id;
 
-    const getStreakQuery = `
-            SELECT * FROM streak 
-            WHERE student_id = ?
-        `;
+app.get('/api/streak/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.params.student_id;
+    const getStreakQuery = `SELECT streak_value FROM streak WHERE student_id = ?`;
 
     db.query(getStreakQuery, [studentId], (err, streaks) => {
         if (err) {
@@ -459,7 +540,8 @@ app.get('/api/streak/:student_id', verifyToken, (req, res) => {
         }
 
         if (streaks.length > 0) {
-            return res.json({ streakValue: streaks[0].streak_value });
+            const streakValue = streaks[0].streak_value;
+            return res.json({ streakValue: streakValue });
         } else {
             return res.json({ streakValue: 0 });
         }
@@ -467,10 +549,7 @@ app.get('/api/streak/:student_id', verifyToken, (req, res) => {
 });
 
 
-
-
-
-app.get('/api/mood/status', verifyToken, (req, res) => {
+app.get('/api/mood/status', verifyTokenStudent, (req, res) => {
     const studentId = req.user.student_id;
     const today = new Date().toISOString().split('T')[0];
     console.log(`Checking records for student ID: ${studentId} on ${today}`);
@@ -491,47 +570,9 @@ app.get('/api/mood/status', verifyToken, (req, res) => {
     });
 });
 
-
-// app.post('/api/quick-track', verifyToken, (req, res) => {
-//     const studentId = req.user.student_id;
-//     const { mood_id } = req.body;
-//     console.log('The student ID passed to quicktrack is: ' + studentId);
-//     const today = new Date().toISOString().split('T')[0];
-
-//     // Check if the student has already recorded 5 quick tracks today
-//     const checkQuery = `
-//         SELECT COUNT(*) as count FROM quick_track
-//         WHERE student_id = ? AND DATE(quick_track_timestamp) = ?
-//     `;
-
-//     db.query(checkQuery, [studentId, today], (err, results) => {
-//         if (err) {
-//             console.error('Error checking quick track count:', err);
-//             return res.status(500).json({ error: 'Failed to check quick track count' });
-//         }
-
-//         if (results[0].count >= 5) {
-//             return res.status(409).json({ message: 'Already tracked 5 times today' });
-//         }
-
-//         // Insert the new quick track record
-//         const insertQuery = `
-//             INSERT INTO quick_track (student_id, mood_id)
-//             VALUES (?, ?)
-//         `;
-
-//         db.query(insertQuery, [studentId, mood_id], (err, result) => {
-//             if (err) {
-//                 console.error('Error inserting quick track:', err);
-//                 return res.status(500).json({ error: 'Failed to add quick track' });
-//             }
-//             res.json({ message: 'Quick track added successfully' });
-//         });
-//     });
-// })
 const cooldownPeriodSeconds = 1 * 60 * 60;
 
-app.post('/api/quick-track', verifyToken, (req, res) => {
+app.post('/api/quick-track', verifyTokenStudent, (req, res) => {
     const studentId = req.user.student_id; // Ensure this line correctly retrieves student_id
     const { mood_id } = req.body;
 
@@ -552,12 +593,12 @@ app.post('/api/quick-track', verifyToken, (req, res) => {
         }
 
         if (results.length > 0) {
-            const lastSubmissionTime = results[0].quick_track_timestamp;
+            const lastSubmissionTime = new Date(results[0].quick_track_timestamp);
             const now = new Date();
             const cooldownEndTime = new Date(lastSubmissionTime.getTime() + cooldownPeriodSeconds * 1000);
 
             if (now < cooldownEndTime) {
-                // Calculate remaining time in seconds
+
                 const remainingSeconds = Math.floor((cooldownEndTime - now) / 1000);
                 return res.status(409).json({
                     message: 'Cooldown period active',
@@ -581,14 +622,33 @@ app.post('/api/quick-track', verifyToken, (req, res) => {
     });
 });
 
-// Check if student exists based on student number or email
-app.get('/api/check-student', async (req, res) => {
-    const { identifier } = req.query;
+app.get('/api/quick-tracker/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.user.student_id;
+
+    const getQuickTrackerQuery = `
+        SELECT * FROM quick_track 
+        JOIN moods ON moods.mood_id = quick_track.mood_id
+        WHERE student_id = ?
+        ORDER BY quick_track_timestamp DESC
+    `;
+
+    db.query(getQuickTrackerQuery, [studentId], (err, records) => {
+        if (err) {
+            console.error('Error fetching quick tracker records:', err);
+            return res.status(500).json({ message: 'Failed to fetch quick tracker records' });
+        }
+
+        return res.json({ records });
+    });
+});
+
+app.post('/api/check-student', (req, res) => {
+    const { studentNumber, studentEmail } = req.body;
     const query = `
-    SELECT * FROM student
-    WHERE student_number = ? OR student_email = ?
-  `;
-    db.query(query, [identifier, identifier], (err, results) => {
+        SELECT * FROM student
+        WHERE student_number = ? OR student_email = ?
+    `;
+    db.query(query, [studentNumber, studentEmail], (err, results) => {
         if (err) {
             console.error('Error checking student existence:', err);
             return res.status(500).json({ error: 'Failed to check student existence' });
@@ -600,7 +660,7 @@ app.get('/api/check-student', async (req, res) => {
     });
 });
 
-app.get('/api/records/:student_id', verifyToken, (req, res) => {
+app.get('/api/records/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
 
     const getRecordsQuery = `
@@ -621,27 +681,9 @@ app.get('/api/records/:student_id', verifyToken, (req, res) => {
     });
 });
 
-app.get('/api/quick-tracker/:student_id', verifyToken, (req, res) => {
-    const studentId = req.params.student_id;
 
-    const getQuickTrackerQuery = `
-        SELECT * FROM quick_track 
-        JOIN moods ON moods.mood_id = quick_track.mood_id
-        WHERE student_id = ?
-        ORDER BY quick_track_timestamp DESC
-    `;
 
-    db.query(getQuickTrackerQuery, [studentId], (err, records) => {
-        if (err) {
-            console.error('Error fetching quick tracker records:', err);
-            return res.status(500).json({ message: 'Failed to fetch quick tracker records' });
-        }
-
-        return res.json({ records });
-    });
-});
-
-app.get('/api/assignments/:student_id', verifyToken, (req, res) => {
+app.get('/api/assignments/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
 
     const getAssignmentsQuery = `
@@ -661,7 +703,7 @@ app.get('/api/assignments/:student_id', verifyToken, (req, res) => {
     });
 });
 
-app.delete('/api/assignments/:assignment_id', verifyToken, (req, res) => {
+app.delete('/api/assignments/:assignment_id', verifyTokenStudent, (req, res) => {
     const assignmentId = req.params.assignment_id;
 
     const deleteAssignmentQuery = `
@@ -675,9 +717,460 @@ app.delete('/api/assignments/:assignment_id', verifyToken, (req, res) => {
             return res.status(500).json({ message: 'Failed to delete assignment' });
         }
 
-            res.json({ message: 'Assignment deleted successfully' });
-        });
+        res.json({ message: 'Assignment deleted successfully' });
     });
+});
+
+app.post('/api/assignments', verifyTokenStudent, (req, res) => {
+    const { student_id, assignment_name, assignment_deadline } = req.body;
+
+    const insertAssignmentQuery = `
+        INSERT INTO assignment (student_id, assignment_name, assignment_deadline)
+        VALUES (?, ?, ?)
+    `;
+
+    db.query(insertAssignmentQuery, [student_id, assignment_name, assignment_deadline], (err, result) => {
+        if (err) {
+            console.error('Error inserting assignment:', err);
+            return res.status(500).json({ message: 'Failed to add assignment' });
+        }
+
+        res.json({ message: 'Assignment added successfully', assignment: { assignment_id: result.insertId, student_id, assignment_name, assignment_deadline } });
+    });
+});
+
+app.put('/api/assignments/:assignment_id', verifyTokenStudent, (req, res) => {
+    const assignmentId = req.params.assignment_id;
+    const { assignment_name, assignment_deadline } = req.body;
+
+    const updateAssignmentQuery = `
+        UPDATE assignment 
+        SET assignment_name = ?, assignment_deadline = ?
+        WHERE assignment_id = ?
+    `;
+
+    db.query(updateAssignmentQuery, [assignment_name, assignment_deadline, assignmentId], (err) => {
+        if (err) {
+            console.error('Error updating assignment:', err);
+            return res.status(500).json({ message: 'Failed to update assignment' });
+        }
+
+        res.json({ message: 'Assignment updated successfully' });
+    });
+});
+
+app.get('/api/mood-scores/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.params.student_id;
+
+    const getMoodScoresQuery = `
+        SELECT m.mood_score,m.mood_name, dr.daily_record_timestamp
+        FROM daily_record dr
+        JOIN moods m ON m.mood_id = dr.mood_id
+        WHERE dr.student_id = ?
+        ORDER BY dr.daily_record_timestamp ASC
+    `;
+
+    db.query(getMoodScoresQuery, [studentId], (err, results) => {
+        if (err) {
+            console.error('Error fetching mood scores:', err);
+            return res.status(500).json({ message: 'Failed to fetch mood scores' });
+        }
+
+        return res.json({ moodScores: results });
+    });
+});
+
+app.get('/api/exercise-minutes/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.user.student_id;
+
+    const getExerciseMinutesQuery = `
+        SELECT daily_record_timestamp, exercise_duration
+        FROM daily_record
+        WHERE student_id = ?
+        ORDER BY daily_record_timestamp ASC
+    `;
+
+    db.query(getExerciseMinutesQuery, [studentId], (err, records) => {
+        if (err) {
+            console.error('Error fetching exercise minutes:', err);
+            return res.status(500).json({ message: 'Failed to fetch exercise minutes' });
+        }
+
+        return res.json({ exerciseMinutes: records });
+    });
+});
+
+// Route to get productivity scores for a student
+app.get('/api/productivity-scores/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.user.student_id;
+
+    const query = `
+        SELECT daily_record_timestamp, productivity_score 
+        FROM daily_record
+        WHERE student_id = ?
+        ORDER BY daily_record_timestamp ASC
+    `;
+
+    db.query(query, [studentId], (err, results) => {
+        if (err) {
+            console.error('Error fetching productivity scores:', err);
+            return res.status(500).json({ error: 'Failed to fetch productivity scores' });
+        }
+
+        res.json({ productivityScores: results });
+    });
+});
+
+// Route to get sleep durations for a student
+app.get('/api/sleep-durations/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.user.student_id;
+
+    const query = `
+        SELECT daily_record_timestamp, sleep_duration 
+        FROM daily_record
+        WHERE student_id = ?
+        ORDER BY daily_record_timestamp ASC
+    `;
+
+    db.query(query, [studentId], (err, results) => {
+        if (err) {
+            console.error('Error fetching sleep durations:', err);
+            return res.status(500).json({ error: 'Failed to fetch sleep durations' });
+        }
+
+        res.json({ sleepDurations: results });
+    });
+});
+
+app.get('/api/socialisation/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.user.student_id;
+    const query = `SELECT dr.daily_record_timestamp, s.socialisation_score, s.socialisation_name
+    FROM daily_record dr JOIN socialisation s ON s.socialisation_id = dr.socialisation_id WHERE student_id = ? 
+    ORDER BY daily_record_timestamp ASC`;
+
+    db.query(query, [studentId], (err, results) => {
+        if (err) {
+            console.error('Error fetching socialisation:', err);
+            return res.status(500).json({ error: 'Failed to fetch socialisation' });
+        }
+
+        res.json({ socialisationScores: results });
+    });
+});
+
+app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.params.student_id;
+
+    const query = `
+        SELECT dr.daily_record_timestamp, dr.exercise_duration, dr.sleep_duration, s.socialisation_score, m.mood_score, dr.productivity_score
+        FROM daily_record dr
+        JOIN  socialisation s ON s.socialisation_id = dr.socialisation_id
+        JOIN moods m ON m.mood_id = dr.mood_id
+        WHERE student_id = ? AND daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+        ORDER BY daily_record_timestamp ASC
+    `;
+
+    db.query(query, [studentId], (err, results) => {
+        if (err) {
+            console.error('Error fetching stats:', err);
+            return res.status(500).json({ message: 'Failed to fetch stats' });
+        }
+
+        const stats = {
+            mood: calculateTrend(results, 'mood_score'),
+            exercise: calculateTrend(results, 'exercise_duration'),
+            sleep: calculateTrend(results, 'sleep_duration'),
+            socialisation: calculateTrend(results, 'socialisation_score'),
+            productivity: calculateTrend(results, 'productivity_score'),
+        };
+
+        res.json({ stats });
+    });
+});
+
+const calculateTrend = (data, key) => {
+    if (data.length < 2) return 0;
+
+    const initial = data[0][key];
+    const final = data[data.length - 1][key];
+
+    return final - initial;
+};
+
+app.get('/api/students', verifyTokenStaff, async (req, res) => {
+    try {
+
+        const studentsQuery = 'SELECT student_id, student_name, student_number FROM student';
+        const [students] = await db.promise().query(studentsQuery);
+
+        const moodTrends = await Promise.all(students.map(async (student) => {
+            const statsQuery = `
+          SELECT m.mood_score, dr.daily_record_timestamp
+          FROM daily_record dr
+          JOIN moods m ON m.mood_id = dr.mood_id
+          WHERE dr.student_id = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+          ORDER BY dr.daily_record_timestamp ASC
+        `;
+
+            const [stats] = await db.promise().query(statsQuery, [student.student_id]);
+
+            const moodTrend = stats.length < 2 ? null : calculateTrend(stats, 'mood_score');
+
+            return { studentId: student.student_id, moodTrend };
+        }));
+
+        const studentsWithMood = students.map((student) => {
+            const moodTrend = moodTrends.find((trend) => trend.studentId === student.student_id)?.moodTrend || 'no record';
+            return { ...student, moodTrend };
+        });
+
+
+        res.json({ students: studentsWithMood });
+    } catch (error) {
+        console.error('Error fetching students:', error);
+        res.status(500).json({ message: 'Failed to fetch students' });
+    }
+});
+
+app.get('/api/student-distribution', verifyTokenStaff, async (req, res) => {
+    try {
+        const courseQuery = `
+            SELECT c.course_name, ay.academic_year_name, COUNT(s.student_id) as student_count
+        FROM student s
+        JOIN course c ON s.course_id = c.course_id
+        JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
+        GROUP BY c.course_name, ay.academic_year_name
+      `;
+        const [distribution] = await db.promise().query(courseQuery);
+        res.json({ distribution });
+    } catch (error) {
+        console.error('Error fetching student distribution:', error);
+        res.status(500).json({ message: 'Failed to fetch student distribution' });
+    }
+});
+
+app.get('/api/wellness-trends', verifyTokenStaff, async (req, res) => {
+    try {
+        const trendsQuery = `
+        SELECT DATE_FORMAT(dr.daily_record_timestamp, '%Y-%m-%d') as date, 
+          AVG(m.mood_score) as avg_mood, 
+          AVG(dr.exercise_duration) as avg_exercise,
+          AVG(dr.sleep_duration) as avg_sleep,
+          AVG(s.socialisation_score) as avg_socialisation
+        FROM daily_record dr
+        JOIN moods m ON dr.mood_id = m.mood_id
+        JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+        GROUP BY date
+        ORDER BY date
+      `;
+        const [trends] = await db.promise().query(trendsQuery);
+        res.json({ trends });
+    } catch (error) {
+        console.error('Error fetching wellness trends:', error);
+        res.status(500).json({ message: 'Failed to fetch wellness trends' });
+    }
+});
+
+app.get('/api/productivity-trends', verifyTokenStaff, async (req, res) => {
+    try {
+        const productivityQuery = `
+        SELECT DATE_FORMAT(dr.daily_record_timestamp, '%Y-%m-%d') as date, 
+          AVG(dr.productivity_score) as avg_productivity
+        FROM daily_record dr
+        GROUP BY date
+        ORDER BY date
+      `;
+        const [trends] = await db.promise().query(productivityQuery);
+        res.json({ trends });
+    } catch (error) {
+        console.error('Error fetching productivity trends:', error);
+        res.status(500).json({ message: 'Failed to fetch productivity trends' });
+    }
+});
+
+app.get('/api/aggregated-data', verifyTokenStaff, (req, res) => {
+    const { metrics, academicYear, course } = req.query;
+
+    let baseQuery = `
+        SELECT dr.daily_record_timestamp,
+    `;
+    let joins = `
+        FROM daily_record dr
+    `;
+    let conditions = `WHERE 1=1`;
+
+    // Add metrics to the query
+    const metricsMap = {
+        mood: 'm.mood_score',
+        exercise: 'dr.exercise_duration',
+        sleep: 'dr.sleep_duration',
+        socialisation: 's.socialisation_score',
+        productivity: 'dr.productivity_score',
+    };
+
+    metrics.split(',').forEach(metric => {
+        baseQuery += `${metricsMap[metric]}, `;
+        if (metric === 'mood') joins += `JOIN moods m ON m.mood_id = dr.mood_id `;
+        if (metric === 'socialisation') joins += `JOIN socialisation s ON s.socialisation_id = dr.socialisation_id `;
+    });
+
+    // Add academic year and course filters
+    if (academicYear) {
+        conditions += ` AND dr.academic_year_id = ${academicYear}`;
+    }
+    if (course) {
+        conditions += ` AND dr.course_id = ${course}`;
+    }
+
+    // Finalize the query
+    const finalQuery = `${baseQuery.slice(0, -2)} ${joins} ${conditions} ORDER BY dr.daily_record_timestamp ASC`;
+
+    db.query(finalQuery, (err, results) => {
+        if (err) {
+            console.error('Error fetching aggregated data:', err);
+            return res.status(500).json({ message: 'Failed to fetch aggregated data' });
+        }
+
+        return res.json({ data: results });
+    });
+});
+
+// Route to get the number of students signed up
+app.get('/api/number-of-students', verifyTokenStaff, (req, res) => {
+    const query = 'SELECT COUNT(*) as totalStudents FROM student';
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Error fetching the number of students:', err);
+            return res.status(500).json({ message: 'Failed to fetch the number of students' });
+        }
+
+        res.json({ totalStudents: results[0].totalStudents });
+    });
+});
+
+// Route to get the number of students who recorded today
+app.get('/api/students-recorded-today', verifyTokenStaff, (req, res) => {
+    const query = `
+        SELECT COUNT(DISTINCT student_id) as studentsRecordedToday 
+        FROM daily_record 
+        WHERE DATE(daily_record_timestamp) = CURDATE()
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Error fetching the number of students who recorded today:', err);
+            return res.status(500).json({ message: 'Failed to fetch the number of students who recorded today' });
+        }
+
+        res.json({ studentsRecordedToday: results[0].studentsRecordedToday });
+    });
+});
+
+// Route to get the distribution of course years among the students signed up
+app.get('/api/course-year-distribution', verifyTokenStaff, (req, res) => {
+    const query = `
+        SELECT ay.academic_year_name, COUNT(s.student_id) as count
+        FROM student s
+        JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
+        GROUP BY ay.academic_year_name
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Error fetching course year distribution:', err);
+            return res.status(500).json({ message: 'Failed to fetch course year distribution' });
+        }
+
+        res.json(results);
+    });
+});
+
+// Route to get the distribution of courses among the students signed up
+app.get('/api/course-distribution', verifyTokenStaff, (req, res) => {
+    const query = `
+        SELECT c.course_name, COUNT(s.student_id) as count
+        FROM student s
+        JOIN course c ON s.course_id = c.course_id
+        GROUP BY c.course_name
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Error fetching course distribution:', err);
+            return res.status(500).json({ message: 'Failed to fetch course distribution' });
+        }
+
+        res.json(results);
+    });
+});
+
+app.get('/api/resources', verifyTokenStudent, (req, res) => {
+    const limit = req.query.limit ? parseInt(req.query.limit) : null;
+
+    let query = 'SELECT * FROM resources ORDER BY resource_added_date DESC';
+    if (limit) {
+        query += ` LIMIT ${limit}`;
+    }
+
+    db.query(query, (err, resources) => {
+        if (err) {
+            console.error('Error fetching resources:', err);
+            return res.status(500).json({ message: 'Failed to fetch resources' });
+        }
+
+        return res.json({ resources });
+    });
+});
+
+// Get all resources
+app.get('/api/staff-resources', verifyTokenStaff, (req, res) => {
+    db.query('SELECT * FROM resources ORDER BY resource_added_date DESC', (err, results) => {
+        if (err) {
+            console.error('Error fetching resources:', err);
+            return res.status(500).json({ message: 'Failed to fetch resources' });
+        }
+        res.json({ resources: results });
+    });
+});
+
+// Add a new resource
+app.post('/api/staff-resources', verifyTokenStaff, (req, res) => {
+    const { resource_name, resource_link } = req.body;
+    db.query('INSERT INTO resources (resource_name, resource_link) VALUES (?, ?)', [resource_name, resource_link], (err, result) => {
+        if (err) {
+            console.error('Error adding resource:', err);
+            return res.status(500).json({ message: 'Failed to add resource' });
+        }
+        res.json({ message: 'Resource added successfully' });
+    });
+});
+
+// Update a resource
+app.put('/api/staff-resources/:resource_id', verifyTokenStaff, (req, res) => {
+    const { resource_id } = req.params;
+    const { resource_name, resource_link } = req.body;
+    db.query('UPDATE resources SET resource_name = ?, resource_link = ? WHERE resource_id = ?', [resource_name, resource_link, resource_id], (err) => {
+        if (err) {
+            console.error('Error updating resource:', err);
+            return res.status(500).json({ message: 'Failed to update resource' });
+        }
+        res.json({ message: 'Resource updated successfully' });
+    });
+});
+
+// Delete a resource
+app.delete('/api/staff-resources/:resource_id', verifyTokenStaff, (req, res) => {
+    const { resource_id } = req.params;
+    db.query('DELETE FROM resources WHERE resource_id = ?', [resource_id], (err) => {
+        if (err) {
+            console.error('Error deleting resource:', err);
+            return res.status(500).json({ message: 'Failed to delete resource' });
+        }
+        res.json({ message: 'Resource deleted successfully' });
+    });
+});
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
