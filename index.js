@@ -4,7 +4,7 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const passport = require('passport');
-const cron = require('node-cron'); 
+const cron = require('node-cron');
 const sendEmail = require('./emailUtils');
 
 require('dotenv').config();
@@ -31,7 +31,7 @@ const verifyTokenStaff = passport.authenticate('staff-jwt', { session: false });
 
 const testEmailAddress = 'amulvenna10@qub.ac.uk';
 // Schedule a job to run every day at midnight
-cron.schedule('* * * * *', async () => {
+cron.schedule('0 0 * * *', async () => {
     try {
         const checkQuery = `
             SELECT student_email, student_name
@@ -52,13 +52,21 @@ cron.schedule('* * * * *', async () => {
             for (const student of results) {
                 const { student_email, student_name } = student;
                 const emailMessage = `Dear ${student_name},\n\nIt seems like you haven't recorded any activities in the last 5 days. Please make sure to record your activities regularly.`;
-                sendEmail(student_email, 'Activity Reminder', emailMessage);
+                const emailHtml = `
+                    <p>Dear ${student_name},</p>
+                    <p>It seems like you haven't recorded any activities in the last 5 days. Please make sure to record your activities regularly.</p>
+                    <p>Best regards,</p>
+                    <p>The Student Pulse Team</p>
+                `;
+                sendEmail(student_email, 'Activity Reminder', emailMessage, emailHtml);
             }
         });
     } catch (error) {
         console.error('Error running scheduled job:', error);
     }
 });
+
+
 
 app.use('/api/quick-track', verifyTokenStudent);
 
@@ -183,10 +191,16 @@ app.post('/api/create-student', async (req, res) => {
                                 res.status(500).json({ message: 'Failed to create initial streak' });
                                 return;
                             }
-
                             const emailMessage = `Hello ${student_name},\n\nYour account has been successfully created. Welcome!`;
                             const loginLink = `${process.env.FRONTEND_URL}/login`; // Link to the login page
-                            sendEmail(student_email, 'Account Created Successfully', emailMessage, '', loginLink);
+                            const emailHtml = `
+                                <p>Hello ${student_name},</p>
+                                <p>Your account has been successfully created. Welcome to our platform! Click the button below to log in:</p>
+                                <a href="${loginLink}" style="display: inline-block; padding: 10px 20px; font-size: 16px; color: white; background-color: blue; text-decoration: none; border-radius: 5px;">Log In</a>
+                                <p>If you did not request this, please contact our support team.</p>
+                            `;
+
+                            sendEmail(student_email, 'Account Created Successfully', emailMessage, emailHtml);
 
                             res.json({ message: 'Account and initial streak created successfully', student_id });
                         });
@@ -215,8 +229,15 @@ app.post('/api/forgot-password', async (req, res) => {
         const token = jwt.sign({ id: user.student_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
-        const emailMessage = `Click the following link to reset your password.`;
-        sendEmail(email, 'Password Reset Request', emailMessage, resetLink);
+        const emailMessage = `Click the following link to reset your password: ${resetLink}`;
+        const emailHtml = `       
+        <p>Hi ${user.student_name},</p>
+            <p>You requested a password reset. Click the button below to reset your password:</p>
+            <a href="${resetLink}" style="display: inline-block; padding: 10px 20px; font-size: 16px; color: white; background-color: blue; text-decoration: none; border-radius: 5px;">Reset Password</a>
+            <p>If you did not request this, please ignore this email.</p>
+            `;
+        sendEmail(email, 'Password Reset Request', emailMessage, emailHtml);
+
 
         res.json({ token });
     });
@@ -243,9 +264,9 @@ app.post('/api/reset-password', async (req, res) => {
         res.status(400).json({ message: 'Invalid or expired token' });
     }
 });
-  
 
-  
+
+
 app.post('/api/login/student', (req, res, next) => {
     passport.authenticate('student-local', { session: false }, (err, student, info) => {
         if (err) {
@@ -324,12 +345,44 @@ app.get('/api/socialisations', (req, res) => {
         res.send(rows);
     })
 })
+app.get('/api/exercises', (req, res) => {
+    const query = `SELECT * FROM exercise`;
+    db.query(query, (err, rows) => {
+        if (err) {
+            console.error('Error fetching exercises:', err);
+            res.status(500).send('Failed to fetch exercises');
+            return;
+        }
+        if (rows.length === 0) {
+            res.status(404).send('No exercises found');
+            return;
+        }
+        res.send(rows);
+    });
+});
+
+app.get('/api/sleeps', (req, res) => {
+    const query = `SELECT * FROM sleep`;
+    db.query(query, (err, rows) => {
+        if (err) {
+            console.error('Error fetching sleeps:', err);
+            res.status(500).send('Failed to fetch sleeps');
+            return;
+        }
+        if (rows.length === 0) {
+            res.status(404).send('No sleeps found');
+            return;
+        }
+        res.send(rows);
+    });
+});
+
 
 app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
 
-    const { student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score } = req.body;
+    const { student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score } = req.body;
 
-    if (!mood_id || !exercise_duration || !sleep_duration || !socialisation_id || !productivity_score) {
+    if (!mood_id || !exercise_id || !sleep_id || !socialisation_id || !productivity_score) {
         return res.status(400).json({ message: 'Missing required fields' });
     }
 
@@ -351,11 +404,11 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
         }
 
         const insertQuery = `
-            INSERT INTO daily_record (student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score) 
+            INSERT INTO daily_record (student_id, mood_id,  exercise_id, sleep_id, socialisation_id, productivity_score) 
             VALUES (?, ?, ?, ?, ?, ?)
         `;
 
-        db.query(insertQuery, [student_id, mood_id, exercise_duration, sleep_duration, socialisation_id, productivity_score], (err) => {
+        db.query(insertQuery, [student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score], (err) => {
             if (err) {
                 console.error('Error inserting daily record:', err);
                 return res.status(500).json({ message: 'Failed to add daily record' });
@@ -455,59 +508,59 @@ app.get('/api/student-details/:student_id', verifyTokenStudent, (req, res) => {
 
 app.post('/api/change-password', async (req, res) => {
     const { userId, currentPassword, newPassword } = req.body;
-  
+
     // Query to fetch the user's current hashed password
     const getUserQuery = `SELECT student_password FROM student WHERE student_id = ?`;
     db.query(getUserQuery, [userId], (err, results) => {
-      if (err) {
-        console.error('Error fetching user:', err);
-        res.status(500).json({ message: 'Error fetching user' });
-        return;
-      }
-  
-      if (results.length === 0) {
-        res.status(404).json({ message: 'User not found' });
-        return;
-      }
-  
-      const hashedPassword = results[0].student_password;
-  
-      // Compare the current password with the hashed password
-      bcrypt.compare(currentPassword, hashedPassword, (err, isMatch) => {
         if (err) {
-          console.error('Error comparing passwords:', err);
-          res.status(500).json({ message: 'Error comparing passwords' });
-          return;
-        }
-  
-        if (!isMatch) {
-          res.status(401).json({ message: 'Current password is incorrect' });
-          return;
-        }
-  
-        // Hash the new password
-        bcrypt.hash(newPassword, saltRounds, (err, newHashedPassword) => {
-          if (err) {
-            console.error('Error hashing new password:', err);
-            res.status(500).json({ message: 'Error hashing new password' });
+            console.error('Error fetching user:', err);
+            res.status(500).json({ message: 'Error fetching user' });
             return;
-          }
-  
-          // Update the user's password in the database
-          const updatePasswordQuery = `UPDATE student SET student_password = ? WHERE student_id = ?`;
-          db.query(updatePasswordQuery, [newHashedPassword, userId], (err) => {
+        }
+
+        if (results.length === 0) {
+            res.status(404).json({ message: 'User not found' });
+            return;
+        }
+
+        const hashedPassword = results[0].student_password;
+
+        // Compare the current password with the hashed password
+        bcrypt.compare(currentPassword, hashedPassword, (err, isMatch) => {
             if (err) {
-              console.error('Error updating password:', err);
-              res.status(500).json({ message: 'Error updating password' });
-              return;
+                console.error('Error comparing passwords:', err);
+                res.status(500).json({ message: 'Error comparing passwords' });
+                return;
             }
-  
-            res.json({ message: 'Password changed successfully' });
-          });
+
+            if (!isMatch) {
+                res.status(401).json({ message: 'Current password is incorrect' });
+                return;
+            }
+
+            // Hash the new password
+            bcrypt.hash(newPassword, saltRounds, (err, newHashedPassword) => {
+                if (err) {
+                    console.error('Error hashing new password:', err);
+                    res.status(500).json({ message: 'Error hashing new password' });
+                    return;
+                }
+
+                // Update the user's password in the database
+                const updatePasswordQuery = `UPDATE student SET student_password = ? WHERE student_id = ?`;
+                db.query(updatePasswordQuery, [newHashedPassword, userId], (err) => {
+                    if (err) {
+                        console.error('Error updating password:', err);
+                        res.status(500).json({ message: 'Error updating password' });
+                        return;
+                    }
+
+                    res.json({ message: 'Password changed successfully' });
+                });
+            });
         });
-      });
     });
-  });
+});
 
 app.get('/api/staff-details/:staff_id', verifyTokenStaff, (req, res) => {
     console.log('User:', req.user); // Log the user object
@@ -664,11 +717,13 @@ app.get('/api/records/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
 
     const getRecordsQuery = `
-           SELECT * FROM daily_record dr 
-  JOIN moods m ON m.mood_id = dr.mood_id
-  JOIN socialisation s ON s.socialisation_id = dr.socialisation_id
-            WHERE dr.student_id = ?
-            ORDER BY daily_record_timestamp DESC
+        SELECT * FROM daily_record dr 
+        JOIN moods m ON m.mood_id = dr.mood_id
+        JOIN socialisation s ON s.socialisation_id = dr.socialisation_id
+        JOIN exercise e ON e.exercise_id = dr.exercise_id
+        JOIN sleep sl ON sl.sleep_id = dr.sleep_id
+        WHERE dr.student_id = ?
+        ORDER BY daily_record_timestamp DESC
         `;
 
     db.query(getRecordsQuery, [studentId], (err, records) => {
@@ -780,25 +835,65 @@ app.get('/api/mood-scores/:student_id', verifyTokenStudent, (req, res) => {
     });
 });
 
-app.get('/api/exercise-minutes/:student_id', verifyTokenStudent, (req, res) => {
+// app.get('/api/exercise-minutes/:student_id', verifyTokenStudent, (req, res) => {
+//     const studentId = req.user.student_id;
+
+//     const getExerciseMinutesQuery = `
+//         SELECT daily_record_timestamp, exercise_duration
+//         FROM daily_record
+//         WHERE student_id = ?
+//         ORDER BY daily_record_timestamp ASC
+//     `;
+
+//     db.query(getExerciseMinutesQuery, [studentId], (err, records) => {
+//         if (err) {
+//             console.error('Error fetching exercise minutes:', err);
+//             return res.status(500).json({ message: 'Failed to fetch exercise minutes' });
+//         }
+
+//         return res.json({ exerciseMinutes: records });
+//     });
+// });
+
+app.get('/api/exercise-time/:student_id', verifyTokenStudent, (req, res) => {
+    const studentId = req.user.student_id;
+    const getExerciseTimeQuery = `
+    SELECT daily_record_timestamp, exercise_name, exercise_score
+    FROM daily_record JOIN exercise ON exercise.exercise_id = daily_record.exercise_id
+    WHERE student_id = ?
+    ORDER BY daily_record_timestamp ASC
+`;
+
+    db.query(getExerciseTimeQuery, [studentId], (err, records) => {
+        if (err) {
+            console.error('Error fetching exercise time:', err);
+            return res.status(500).json({ message: 'Failed to fetch exercise time' });
+        }
+
+        return res.json({ exerciseTime: records });
+    });
+})
+
+app.get('/api/sleep-rating/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.user.student_id;
 
-    const getExerciseMinutesQuery = `
-        SELECT daily_record_timestamp, exercise_duration
+    const query = `
+        SELECT daily_record_timestamp, sleep_id 
         FROM daily_record
         WHERE student_id = ?
         ORDER BY daily_record_timestamp ASC
     `;
 
-    db.query(getExerciseMinutesQuery, [studentId], (err, records) => {
+    db.query(query, [studentId], (err, results) => {
         if (err) {
-            console.error('Error fetching exercise minutes:', err);
-            return res.status(500).json({ message: 'Failed to fetch exercise minutes' });
+            console.error('Error fetching sleep rating:', err);
+            return res.status(500).json({ error: 'Failed to fetch sleep rating' });
         }
 
-        return res.json({ exerciseMinutes: records });
+        res.json({ sleepRating: results });
     });
 });
+
 
 // Route to get productivity scores for a student
 app.get('/api/productivity-scores/:student_id', verifyTokenStudent, (req, res) => {
@@ -822,25 +917,25 @@ app.get('/api/productivity-scores/:student_id', verifyTokenStudent, (req, res) =
 });
 
 // Route to get sleep durations for a student
-app.get('/api/sleep-durations/:student_id', verifyTokenStudent, (req, res) => {
-    const studentId = req.user.student_id;
+// app.get('/api/sleep-durations/:student_id', verifyTokenStudent, (req, res) => {
+//     const studentId = req.user.student_id;
 
-    const query = `
-        SELECT daily_record_timestamp, sleep_duration 
-        FROM daily_record
-        WHERE student_id = ?
-        ORDER BY daily_record_timestamp ASC
-    `;
+//     const query = `
+//         SELECT daily_record_timestamp, sleep_duration 
+//         FROM daily_record
+//         WHERE student_id = ?
+//         ORDER BY daily_record_timestamp ASC
+//     `;
 
-    db.query(query, [studentId], (err, results) => {
-        if (err) {
-            console.error('Error fetching sleep durations:', err);
-            return res.status(500).json({ error: 'Failed to fetch sleep durations' });
-        }
+//     db.query(query, [studentId], (err, results) => {
+//         if (err) {
+//             console.error('Error fetching sleep durations:', err);
+//             return res.status(500).json({ error: 'Failed to fetch sleep durations' });
+//         }
 
-        res.json({ sleepDurations: results });
-    });
-});
+//         res.json({ sleepDurations: results });
+//     });
+// });
 
 app.get('/api/socialisation/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.user.student_id;
@@ -862,10 +957,12 @@ app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
 
     const query = `
-        SELECT dr.daily_record_timestamp, dr.exercise_duration, dr.sleep_duration, s.socialisation_score, m.mood_score, dr.productivity_score
+        SELECT dr.daily_record_timestamp, e.exercise_score, sl.sleep_score, s.socialisation_score, m.mood_score, dr.productivity_score
         FROM daily_record dr
         JOIN  socialisation s ON s.socialisation_id = dr.socialisation_id
         JOIN moods m ON m.mood_id = dr.mood_id
+        JOIN exercise e ON e.exercise_id = dr.exercise_id
+        JOIN sleep sl ON sl.sleep_id = dr.sleep_id
         WHERE student_id = ? AND daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
         ORDER BY daily_record_timestamp ASC
     `;
@@ -878,8 +975,8 @@ app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
 
         const stats = {
             mood: calculateTrend(results, 'mood_score'),
-            exercise: calculateTrend(results, 'exercise_duration'),
-            sleep: calculateTrend(results, 'sleep_duration'),
+            exercise: calculateTrend(results, 'exercise_score'),
+            sleep: calculateTrend(results, 'sleep_score'),
             socialisation: calculateTrend(results, 'socialisation_score'),
             productivity: calculateTrend(results, 'productivity_score'),
         };
@@ -954,12 +1051,14 @@ app.get('/api/wellness-trends', verifyTokenStaff, async (req, res) => {
         const trendsQuery = `
         SELECT DATE_FORMAT(dr.daily_record_timestamp, '%Y-%m-%d') as date, 
           AVG(m.mood_score) as avg_mood, 
-          AVG(dr.exercise_duration) as avg_exercise,
-          AVG(dr.sleep_duration) as avg_sleep,
+          AVG(e.exercise_score) as avg_exercise,
+          AVG(sl.sleep_score) as avg_sleep,
           AVG(s.socialisation_score) as avg_socialisation
         FROM daily_record dr
         JOIN moods m ON dr.mood_id = m.mood_id
         JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+        JOIN exercise e ON dr.exercise_id = e.exercise_id
+        JOIN sleep sl ON dr.sleep_id = sl.skeep_id
         GROUP BY date
         ORDER BY date
       `;
@@ -1002,8 +1101,8 @@ app.get('/api/aggregated-data', verifyTokenStaff, (req, res) => {
     // Add metrics to the query
     const metricsMap = {
         mood: 'm.mood_score',
-        exercise: 'dr.exercise_duration',
-        sleep: 'dr.sleep_duration',
+        exercise: 'e.exercise_score',
+        sleep: 'sl.sleep_score',
         socialisation: 's.socialisation_score',
         productivity: 'dr.productivity_score',
     };
@@ -1012,6 +1111,8 @@ app.get('/api/aggregated-data', verifyTokenStaff, (req, res) => {
         baseQuery += `${metricsMap[metric]}, `;
         if (metric === 'mood') joins += `JOIN moods m ON m.mood_id = dr.mood_id `;
         if (metric === 'socialisation') joins += `JOIN socialisation s ON s.socialisation_id = dr.socialisation_id `;
+        if (metric === 'exercise') joins += `JOIN exercise e ON e.exercise_id = dr.exercise_id `;
+        if (metric === 'sleep') joins += `JOIN sleep sl ON sl.sleep_id = dr.sleep_id `;
     });
 
     // Add academic year and course filters
