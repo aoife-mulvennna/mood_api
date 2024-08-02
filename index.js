@@ -972,14 +972,45 @@ app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
             console.error('Error fetching stats:', err);
             return res.status(500).json({ message: 'Failed to fetch stats' });
         }
+        const calculateAverage = (data, key) => {
+            const sum = data.reduce((acc, record) => acc + record[key], 0);
+            return data.length ? sum / data.length : 0;
+        };
+
+        const todayRecord = results[results.length - 1];
+        const last7DaysRecords = results.slice(0, -1);
+        const averages = {
+            mood: calculateAverage(last7DaysRecords, 'mood_score'),
+            exercise: calculateAverage(last7DaysRecords, 'exercise_score'),
+            sleep: calculateAverage(last7DaysRecords, 'sleep_score'),
+            socialisation: calculateAverage(last7DaysRecords, 'socialisation_score'),
+            productivity: calculateAverage(last7DaysRecords, 'productivity_score'),
+        };
 
         const stats = {
-            mood: calculateTrend(results, 'mood_score'),
-            exercise: calculateTrend(results, 'exercise_score'),
-            sleep: calculateTrend(results, 'sleep_score'),
-            socialisation: calculateTrend(results, 'socialisation_score'),
-            productivity: calculateTrend(results, 'productivity_score'),
+            today: {
+                mood: todayRecord.mood_score,
+                exercise: todayRecord.exercise_score,
+                sleep: todayRecord.sleep_score,
+                socialisation: todayRecord.socialisation_score,
+                productivity: todayRecord.productivity_score,
+            },
+            averages: {
+                mood: averages.mood,
+                exercise: averages.exercise,
+                sleep: averages.sleep,
+                socialisation: averages.socialisation,
+                productivity: averages.productivity,
+            },
+            trends: {
+                mood: todayRecord.mood_score - averages.mood,
+                exercise: todayRecord.exercise_score - averages.exercise,
+                sleep: todayRecord.sleep_score - averages.sleep,
+                socialisation: todayRecord.socialisation_score - averages.socialisation,
+                productivity: todayRecord.productivity_score - averages.productivity,
+            },
         };
+
 
         res.json({ stats });
     });
