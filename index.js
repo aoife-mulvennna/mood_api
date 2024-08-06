@@ -30,7 +30,7 @@ const verifyTokenStudent = passport.authenticate('student-jwt', { session: false
 const verifyTokenStaff = passport.authenticate('staff-jwt', { session: false });
 
 const testEmailAddress = 'amulvenna10@qub.ac.uk';
-// Schedule a job to run every day at midnight
+// Schedule a job to run every day at midnight to alert student that thney have not recorded in 5 days (currently set to 1 minute)
 cron.schedule('0 0 * * *', async () => {
     try {
         const checkQuery = `
@@ -66,7 +66,48 @@ cron.schedule('0 0 * * *', async () => {
     }
 });
 
+// Scheduled job to check for 14-day inactivity (running daily at midnight)
+cron.schedule('0 0 * * *', async () => {
+    try {
+        const checkQuery = `
+            SELECT s.student_email, s.student_name, s.student_id, st.staff_email
+            FROM student s
+            JOIN staff st
+            WHERE s.student_id NOT IN (
+                SELECT DISTINCT student_id 
+                FROM daily_record
+                WHERE daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+            )
+            AND s.student_id NOT IN (
+                SELECT DISTINCT student_id 
+                FROM quick_track
+                WHERE quick_track_timestamp >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+            )
+        `;
 
+        db.query(checkQuery, async (err, results) => {
+            if (err) {
+                console.error('Error checking students:', err);
+                return;
+            }
+
+            for (const record of results) {
+                const { student_email, student_name, student_id, staff_email } = record;
+                const emailMessage = `Dear Staff,\n\nStudent ${student_name} has not recorded any activities in the last 14 days. Please follow up with them.\n\nBest regards,\nYour Wellness App Team`;
+                const emailHtml = `
+                    <p>Dear Staff,</p>
+                    <p>Student ${student_name} has not recorded any activities in the last 14 days. Please follow up with them.</p>
+                    <p><a href="${process.env.FRONTEND_URL}/write-email/${student_id}" style="display: inline-block; padding: 10px 20px; font-size: 16px; color: white; background-color: blue; text-decoration: none; border-radius: 5px;">Write Email</a></p>
+                    <p>Best regards,</p>
+                    <p>Your Wellness App Team</p>
+                `;
+                sendEmail(staff_email, 'Student Activity Alert', emailMessage, emailHtml);
+            }
+        });
+    } catch (error) {
+        console.error('Error running scheduled job:', error);
+    }
+});
 
 app.use('/api/quick-track', verifyTokenStudent);
 
@@ -1028,7 +1069,17 @@ const calculateTrend = (data, key) => {
 app.get('/api/students', verifyTokenStaff, async (req, res) => {
     try {
 
-        const studentsQuery = 'SELECT student_id, student_name, student_number FROM student';
+        const studentsQuery = `
+        SELECT 
+            s.student_id, 
+            s.student_name, 
+            s.student_number, 
+            COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date
+        FROM student s
+        LEFT JOIN daily_record dr ON s.student_id = dr.student_id
+        LEFT JOIN quick_track qt ON s.student_id = qt.student_id
+        GROUP BY s.student_id
+    `;
         const [students] = await db.promise().query(studentsQuery);
 
         const moodTrends = await Promise.all(students.map(async (student) => {
@@ -1237,39 +1288,53 @@ app.get('/api/course-distribution', verifyTokenStaff, (req, res) => {
     });
 });
 
-app.get('/api/resources', verifyTokenStudent, (req, res) => {
-    const limit = req.query.limit ? parseInt(req.query.limit) : null;
-
-    let query = 'SELECT * FROM resources ORDER BY resource_added_date DESC';
-    if (limit) {
-        query += ` LIMIT ${limit}`;
-    }
-
-    db.query(query, (err, resources) => {
-        if (err) {
-            console.error('Error fetching resources:', err);
-            return res.status(500).json({ message: 'Failed to fetch resources' });
+app.get('/api/resources', verifyTokenStudent, async (req, res) => {
+    try {
+        const limit = req.query.limit ? parseInt(req.query.limit) : null;
+        let query = `
+      SELECT r.resource_added_date, r.resource_name, rt.resource_topic_name, r.resource_topic_id, r.resource_link FROM resources r 
+    JOIN resource_topic rt ON rt.resource_topic_id = r.resource_topic_id ORDER BY r.resource_added_date DESC
+        `;
+        if (limit) {
+            query += ` LIMIT ${limit}`;
         }
-
-        return res.json({ resources });
-    });
+        const [resources] = await db.promise().query(query);
+        res.json({ resources });
+    
+    } catch (error) {
+        console.error('Error fetching resources:', error);
+        res.status(500).json({ message: 'Failed to fetch resources' });
+    }
 });
 
 // Get all resources
+app.get('/api/resource-topics', verifyTokenStaff, (req, res) => {
+    db.query('SELECT * FROM resource_topic', (err, results) => {
+        if (err) {
+            console.error('Error fetching resource topics:', err);
+            return res.status(500).json({ message: 'Failed to fetch resource topics' });
+        }
+        res.json({ resourceTopics: results });
+    });
+});
+
 app.get('/api/staff-resources', verifyTokenStaff, (req, res) => {
-    db.query('SELECT * FROM resources ORDER BY resource_added_date DESC', (err, results) => {
+    db.query(`SELECT * FROM resources r
+        JOIN resource_topic rt WHERE rt.resource_topic_id = r.resource_topic_id  
+        ORDER BY r.resource_added_date DESC`, (err, results) => {
         if (err) {
             console.error('Error fetching resources:', err);
             return res.status(500).json({ message: 'Failed to fetch resources' });
         }
+      
         res.json({ resources: results });
     });
 });
 
 // Add a new resource
 app.post('/api/staff-resources', verifyTokenStaff, (req, res) => {
-    const { resource_name, resource_link } = req.body;
-    db.query('INSERT INTO resources (resource_name, resource_link) VALUES (?, ?)', [resource_name, resource_link], (err, result) => {
+    const { resource_name, resource_link, resource_topic_id } = req.body;
+    db.query('INSERT INTO resources (resource_name, resource_link, resource_topic_id) VALUES (?, ?, ?)', [resource_name, resource_link, resource_topic_id], (err, result) => {
         if (err) {
             console.error('Error adding resource:', err);
             return res.status(500).json({ message: 'Failed to add resource' });
@@ -1277,6 +1342,7 @@ app.post('/api/staff-resources', verifyTokenStaff, (req, res) => {
         res.json({ message: 'Resource added successfully' });
     });
 });
+
 
 // Update a resource
 app.put('/api/staff-resources/:resource_id', verifyTokenStaff, (req, res) => {
@@ -1301,6 +1367,90 @@ app.delete('/api/staff-resources/:resource_id', verifyTokenStaff, (req, res) => 
         }
         res.json({ message: 'Resource deleted successfully' });
     });
+});
+
+app.get('/api/recommended-resources/:student_id', verifyTokenStudent, async (req, res) => {
+    const studentId = req.params.student_id;
+
+    try {
+        const threeDaysAgo = new Date();
+        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+        const formattedDate = threeDaysAgo.toISOString().split('T')[0];
+
+        const query = `
+            SELECT 
+                r.resource_name, r.resource_link, rt.resource_topic_name, dr.daily_record_timestamp
+            FROM 
+                daily_record dr
+            JOIN 
+                resources r ON r.resource_topic_id = (
+                    CASE 
+                        WHEN dr.mood_id IN (SELECT mood_id FROM moods WHERE mood_score < 5) THEN 1 -- Assuming 1 is the topic ID for mood resources
+                        WHEN dr.exercise_id IN (SELECT exercise_id FROM exercise WHERE exercise_score < 5) THEN 2 -- Assuming 2 is the topic ID for exercise resources
+                        -- Add more cases as needed
+                    END
+                )
+            JOIN 
+                resource_topic rt ON rt.resource_topic_id = r.resource_topic_id
+            WHERE 
+                dr.student_id = ? AND DATE(dr.daily_record_timestamp) >= ?
+            ORDER BY 
+                dr.daily_record_timestamp DESC
+            LIMIT 3;
+        `;
+
+        const [resources] = await db.promise().query(query, [studentId, formattedDate]);
+
+        res.json({ resources });
+    } catch (error) {
+        console.error('Error fetching recommended resources:', error);
+        res.status(500).json({ message: 'Failed to fetch recommended resources' });
+    }
+});
+
+
+app.post('/api/send-email', verifyTokenStaff, async (req, res) => {
+    const { to, subject, message } = req.body;
+
+    try {
+        const emailHtml = `
+            <p>${message}</p>
+        `;
+        sendEmail(to, subject, message, emailHtml);
+        res.json({ message: 'Email sent successfully' });
+    } catch (error) {
+        console.error('Error sending email:', error);
+        res.status(500).json({ message: 'Failed to send email' });
+    }
+});
+
+app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
+    const studentId = req.params.student_id;
+
+    try {
+        const studentQuery = `
+            SELECT s.student_name, s.student_email, s.student_number, c.course_name, ay.academic_year_name,
+            COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date
+            FROM student s
+            LEFT JOIN daily_record dr ON s.student_id = dr.student_id
+            LEFT JOIN quick_track qt ON s.student_id = qt.student_id
+            LEFT JOIN course c ON s.course_id = c.course_id
+            LEFT JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
+            WHERE s.student_id = ?
+            GROUP BY s.student_id
+        `;
+        const [student] = await db.promise().query(studentQuery, [studentId]);
+        console.log('Query result:', student);
+
+        if (student.length === 0) {
+            return res.status(404).json({ message: 'Student not found' });
+        }
+
+        res.json(student[0]);
+    } catch (error) {
+        console.error('Error fetching student profile:', error);
+        res.status(500).json({ message: 'Failed to fetch student profile' });
+    }
 });
 
 
