@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const passport = require('passport');
 const cron = require('node-cron');
-const sendEmail = require('./emailUtils');
+const sendEmail = require('./utils/emailUtils');
 
 require('dotenv').config();
 require('./passport-setup');
@@ -19,17 +19,33 @@ app.use(cors());
 app.use(passport.initialize()); // Initialize Passport middleware
 
 const JWT_SECRET = process.env.JWT_SECRET;
-
 if (!JWT_SECRET) {
     console.error('JWT_SECRET is not defined in the environment variables');
     process.exit(1); // Exit the process if JWT_SECRET is not defined
 }
+
+// Utility functions 
+const calculateTrend = (data, key) => {
+    if (data.length < 2) return 0;
+    const initial = data[0][key];
+    const final = data[data.length - 1][key];
+    return final - initial;
+};
+
+// Error Handling Middleware
+app.use((err, req, res, next) => {
+    console.error('Internal server error:', err);
+    res.status(500).json({ error: 'An internal server error occurred' });
+});
 
 // Middleware to verify JWT token
 const verifyTokenStudent = passport.authenticate('student-jwt', { session: false });
 const verifyTokenStaff = passport.authenticate('staff-jwt', { session: false });
 
 const testEmailAddress = 'amulvenna10@qub.ac.uk';
+
+
+// CRON Jobs
 // Schedule a job to run every day at midnight to alert student that thney have not recorded in 5 days (currently set to 1 minute)
 cron.schedule('0 0 * * *', async () => {
     try {
@@ -66,7 +82,6 @@ cron.schedule('0 0 * * *', async () => {
     }
 });
 
-// Scheduled job to check for 14-day inactivity (running daily at midnight)
 cron.schedule('0 0 * * *', async () => {
     try {
         const checkQuery = `
@@ -108,6 +123,8 @@ cron.schedule('0 0 * * *', async () => {
         console.error('Error running scheduled job:', error);
     }
 });
+
+// Routes
 
 app.use('/api/quick-track', verifyTokenStudent);
 
@@ -1015,7 +1032,7 @@ app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
         }
         const calculateAverage = (data, key) => {
             const sum = data.reduce((acc, record) => acc + record[key], 0);
-            return data.length ? sum / data.length : 0;
+            return data.length ? (sum / data.length).toFixed(1) : 0;
         };
 
         const todayRecord = results[results.length - 1];
@@ -1057,14 +1074,6 @@ app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
     });
 });
 
-const calculateTrend = (data, key) => {
-    if (data.length < 2) return 0;
-
-    const initial = data[0][key];
-    const final = data[data.length - 1][key];
-
-    return final - initial;
-};
 
 app.get('/api/students', verifyTokenStaff, async (req, res) => {
     try {
@@ -1454,11 +1463,6 @@ app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) =
 });
 
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Internal server error:', err);
-    res.status(500).json({ error: 'An internal server error occurred' });
-});
 
 
 app.listen(8000, () => {
