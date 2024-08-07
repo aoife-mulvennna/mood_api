@@ -3,7 +3,7 @@ const LocalStrategy = require('passport-local').Strategy;
 const JwtStrategy = require('passport-jwt').Strategy;
 const { ExtractJwt } = require('passport-jwt');
 const bcrypt = require('bcrypt');
-const db = require('./db'); // Assuming you have your MySQL connection in a separate file
+const db = require('./db'); 
 //const jwt = require('jsonwebtoken');
 require('dotenv').config();
 

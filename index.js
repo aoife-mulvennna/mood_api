@@ -1309,7 +1309,7 @@ app.get('/api/resources', verifyTokenStudent, async (req, res) => {
         }
         const [resources] = await db.promise().query(query);
         res.json({ resources });
-    
+
     } catch (error) {
         console.error('Error fetching resources:', error);
         res.status(500).json({ message: 'Failed to fetch resources' });
@@ -1335,7 +1335,7 @@ app.get('/api/staff-resources', verifyTokenStaff, (req, res) => {
             console.error('Error fetching resources:', err);
             return res.status(500).json({ message: 'Failed to fetch resources' });
         }
-      
+
         res.json({ resources: results });
     });
 });
@@ -1432,6 +1432,30 @@ app.post('/api/send-email', verifyTokenStaff, async (req, res) => {
         res.status(500).json({ message: 'Failed to send email' });
     }
 });
+
+app.post('/api/contact-staff', verifyTokenStudent, async (req, res) => {
+    const { subject, message } = req.body;
+
+    const staffQuery = 'SELECT staff_name, staff_email FROM staff';
+    db.query(staffQuery, async (err, results) => {
+        if (err) {
+            console.error('Error fetching staff emails:', err);
+            return res.status(500).json({ message: 'Failed to fetch staff emails' });
+        }
+
+        for (const staff of results) {
+            const { staff_name, staff_email } = staff;
+            const emailMessage = `Hi ${staff_name},\n\n${message}`;
+            const emailHtml = `<p>Hi ${staff_name},</p><p>${message}</p>`;
+
+            sendEmail(staff_email, subject, emailMessage, emailHtml);
+        }
+
+        res.json({ message: 'Emails sent successfully' });
+    });
+});
+
+
 
 app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
     const studentId = req.params.student_id;
