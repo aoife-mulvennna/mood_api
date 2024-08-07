@@ -437,7 +437,6 @@ app.get('/api/sleeps', (req, res) => {
 
 
 app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
-
     const { student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score } = req.body;
 
     if (!mood_id || !exercise_id || !sleep_id || !socialisation_id || !productivity_score) {
@@ -462,7 +461,7 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
         }
 
         const insertQuery = `
-            INSERT INTO daily_record (student_id, mood_id,  exercise_id, sleep_id, socialisation_id, productivity_score) 
+            INSERT INTO daily_record (student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score) 
             VALUES (?, ?, ?, ?, ?, ?)
         `;
 
@@ -472,69 +471,93 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                 return res.status(500).json({ message: 'Failed to add daily record' });
             }
 
-            const getStreakQuery = `
-                SELECT * FROM streak 
-                WHERE student_id = ?
+            const getLastRecordQuery = `
+                SELECT DATE(daily_record_timestamp) as last_record_date 
+                FROM daily_record 
+                WHERE student_id = ? 
+                ORDER BY daily_record_timestamp DESC 
+                LIMIT 1
             `;
 
-            db.query(getStreakQuery, [student_id], (err, streaks) => {
+            db.query(getLastRecordQuery, [student_id], (err, lastRecords) => {
                 if (err) {
-                    console.error('Error fetching streak:', err);
-                    return res.status(500).json({ message: 'Failed to fetch streak' });
+                    console.error('Error fetching last record:', err);
+                    return res.status(500).json({ message: 'Failed to fetch last record' });
                 }
 
-                const currentDate = new Date();
-                let streakValue = 1;
-                let lastRecordDate = currentDate;
+                const getCurrentStreakQuery = `
+                    SELECT streak_value 
+                    FROM streak 
+                    WHERE student_id = ?
+                `;
 
-                if (streaks.length > 0) {
-                    const streak = streaks[0];
-                    const lastRecord = new Date(streak.last_record_time);
-                    const oneDay = 24 * 60 * 60 * 1000;
-
-                    if (currentDate - lastRecord === oneDay) {
-                        streakValue = streak.streak_value + 1;
-                    } else if (currentDate - lastRecord < oneDay) {
-                        streakValue = streak.streak_value;
-                    } else {
-                        streakValue = 1; // Reset streak if more than a day has passed
+                db.query(getCurrentStreakQuery, [student_id], (err, streaks) => {
+                    if (err) {
+                        console.error('Error fetching streak:', err);
+                        return res.status(500).json({ message: 'Failed to fetch streak' });
                     }
 
-                    lastRecordDate = currentDate;
+                    let streakValue = 1;
 
-                    const updateStreakQuery = `
-                        UPDATE streak 
-                        SET streak_value = ?, last_record_time = ? 
-                        WHERE student_id = ?
-                    `;
+                    if (streaks.length > 0) {
+                        streakValue = streaks[0].streak_value;
+                    }
 
-                    db.query(updateStreakQuery, [streakValue, lastRecordDate, student_id], (err) => {
-                        if (err) {
-                            console.error('Error updating streak:', err);
-                            return res.status(500).json({ message: 'Failed to update streak' });
+                    if (lastRecords.length > 0) {
+                        const lastRecordDate = new Date(lastRecords[0].last_record_date);
+                        const yesterday = new Date();
+                        yesterday.setDate(yesterday.getDate() - 1);
+
+                        const lastRecordDateStr = lastRecordDate.toISOString().split('T')[0];
+                        // console.log('last record date: ', lastRecordDateStr);
+                        const yesterdayStr = yesterday.toISOString().split('T')[0];
+                        // console.log('yesterdayStr:', yesterdayStr);
+
+                        if (lastRecordDateStr === yesterdayStr) {
+                            streakValue += 1;
+                        } else {
+                            streakValue = 1; // Reset streak if the last record is not from yesterday
                         }
+                    }
 
-                        return res.json({ message: 'Daily record and streak updated successfully', streakValue });
-                    });
-                } else {
-                    const insertStreakQuery = `
-                        INSERT INTO streak (streak_value, student_id, last_record_time) 
-                        VALUES (?, ?, ?)
-                    `;
+                    if (streaks.length > 0) {
+                        const updateStreakQuery = `
+                            UPDATE streak 
+                            SET streak_value = ? 
+                            WHERE student_id = ?
+                        `;
 
-                    db.query(insertStreakQuery, [streakValue, student_id, lastRecordDate], (err) => {
-                        if (err) {
-                            console.error('Error inserting streak:', err);
-                            return res.status(500).json({ message: 'Failed to add streak' });
-                        }
+                        db.query(updateStreakQuery, [streakValue, student_id], (err) => {
+                            if (err) {
+                                console.error('Error updating streak:', err);
+                                return res.status(500).json({ message: 'Failed to update streak' });
+                            }
 
-                        return res.json({ message: 'Daily record and streak added successfully', streakValue });
-                    });
-                }
+                            return res.json({ message: 'Daily record and streak updated successfully', streakValue });
+                        });
+                    } else {
+                        const insertStreakQuery = `
+                            INSERT INTO streak (streak_value, student_id) 
+                            VALUES (?, ?)
+                        `;
+
+                        db.query(insertStreakQuery, [streakValue, student_id], (err) => {
+                            if (err) {
+                                console.error('Error inserting streak:', err);
+                                return res.status(500).json({ message: 'Failed to add streak' });
+                            }
+
+                            return res.json({ message: 'Daily record and streak added successfully', streakValue });
+                        });
+                    }
+                });
             });
         });
     });
 });
+
+
+
 
 
 app.post('/api/logout', (req, res) => {
