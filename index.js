@@ -6,6 +6,10 @@ const jwt = require('jsonwebtoken');
 const passport = require('passport');
 const cron = require('node-cron');
 const sendEmail = require('./utils/emailUtils');
+const { Parser } = require('json2csv');
+const fs = require('fs');
+const path = require('path');
+const moment = require('moment');
 
 require('dotenv').config();
 require('./passport-setup');
@@ -529,10 +533,145 @@ app.get('/api/sleeps', (req, res) => {
 });
 
 
+// app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
+//     const { student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score, tags } = req.body;
+
+//     if (!mood_id || !exercise_id || !sleep_id || !socialisation_id || !productivity_score) {
+//         return res.status(400).json({ message: 'Missing required fields' });
+//     }
+
+//     const today = new Date().toISOString().split('T')[0];
+
+//     const checkRecordQuery = `
+//         SELECT * FROM daily_record 
+//         WHERE student_id = ? AND DATE(daily_record_timestamp) = ?
+//     `;
+
+//     db.query(checkRecordQuery, [student_id, today], (err, records) => {
+//         if (err) {
+//             console.error('Error checking daily record:', err);
+//             return res.status(500).send('Failed to check daily record');
+//         }
+
+//         if (records.length > 0) {
+//             return res.status(409).json({ message: 'Already tracked today' });
+//         }
+
+//         const insertQuery = `
+//             INSERT INTO daily_record (student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score) 
+//             VALUES (?, ?, ?, ?, ?, ?)
+//         `;
+
+//         db.query(insertQuery, [student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score], (err, result) => {
+//             if (err) {
+//                 console.error('Error inserting daily record:', err);
+//                 return res.status(500).json({ message: 'Failed to add daily record' });
+//             }
+
+//             const dailyRecordId = result.insertId;
+
+//             // Insert tags into daily_record_tag table
+//             const tagInserts = tags.map(tag_id => [dailyRecordId, tag_id]);
+//             const insertTagsQuery = `
+//                 INSERT INTO daily_record_tag (daily_record_id, tag_id) VALUES ?
+//             `;
+
+//             db.query(insertTagsQuery, [tagInserts], (err) => {
+//                 if (err) {
+//                     console.error('Error inserting daily record tags:', err);
+//                     return res.status(500).json({ message: 'Failed to add daily record tags' });
+//                 }
+
+//                 const getLastRecordQuery = `
+//                 SELECT DATE(daily_record_timestamp) as last_record_date 
+//                 FROM daily_record 
+//                 WHERE student_id = ? 
+//                 ORDER BY daily_record_timestamp DESC 
+//                 LIMIT 1
+//             `;
+
+//                 db.query(getLastRecordQuery, [student_id], (err, lastRecords) => {
+//                     if (err) {
+//                         console.error('Error fetching last record:', err);
+//                         return res.status(500).json({ message: 'Failed to fetch last record' });
+//                     }
+
+//                     const getCurrentStreakQuery = `
+//                     SELECT streak_value 
+//                     FROM streak 
+//                     WHERE student_id = ?
+//                 `;
+
+//                     db.query(getCurrentStreakQuery, [student_id], (err, streaks) => {
+//                         if (err) {
+//                             console.error('Error fetching streak:', err);
+//                             return res.status(500).json({ message: 'Failed to fetch streak' });
+//                         }
+
+//                         let streakValue = 1;
+
+//                         if (streaks.length > 0) {
+//                             streakValue = streaks[0].streak_value;
+//                         }
+
+//                         if (lastRecords.length > 0) {
+//                             const lastRecordDate = new Date(lastRecords[0].last_record_date);
+//                             const yesterday = new Date();
+//                             yesterday.setDate(yesterday.getDate() - 1);
+
+//                             const lastRecordDateStr = lastRecordDate.toISOString().split('T')[0];
+//                             // console.log('last record date: ', lastRecordDateStr);
+//                             const yesterdayStr = yesterday.toISOString().split('T')[0];
+//                             // console.log('yesterdayStr:', yesterdayStr);
+
+//                             if (lastRecordDateStr === yesterdayStr) {
+//                                 streakValue += 1;
+//                             } else {
+//                                 streakValue = 1; // Reset streak if the last record is not from yesterday
+//                             }
+//                         }
+
+//                         if (streaks.length > 0) {
+//                             const updateStreakQuery = `
+//                             UPDATE streak 
+//                             SET streak_value = ? 
+//                             WHERE student_id = ?
+//                         `;
+
+//                             db.query(updateStreakQuery, [streakValue, student_id], (err) => {
+//                                 if (err) {
+//                                     console.error('Error updating streak:', err);
+//                                     return res.status(500).json({ message: 'Failed to update streak' });
+//                                 }
+
+//                                 return res.json({ message: 'Daily record and streak updated successfully', streakValue });
+//                             });
+//                         } else {
+//                             const insertStreakQuery = `
+//                             INSERT INTO streak (streak_value, student_id) 
+//                             VALUES (?, ?)
+//                         `;
+
+//                             db.query(insertStreakQuery, [streakValue, student_id], (err) => {
+//                                 if (err) {
+//                                     console.error('Error inserting streak:', err);
+//                                     return res.status(500).json({ message: 'Failed to add streak' });
+//                                 }
+
+//                                 return res.json({ message: 'Daily record and streak added successfully', streakValue });
+//                             });
+//                         }
+//                     });
+//                 });
+//             });
+//         });
+//     });
+// });
 app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
     const { student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score, tags } = req.body;
-
-    if (!mood_id || !exercise_id || !sleep_id || !socialisation_id || !productivity_score) {
+    console.log('req.body:', req.body);
+    //check these are not null or undefined and allow 0. 
+    if (mood_id == null || exercise_id == null || sleep_id == null || socialisation_id == null || productivity_score == null) {
         return res.status(400).json({ message: 'Missing required fields' });
     }
 
@@ -550,23 +689,59 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
         }
 
         if (records.length > 0) {
-            return res.status(409).json({ message: 'Already tracked today' });
+            // Update existing record
+            const dailyRecordId = records[0].daily_record_id;
+
+            const updateQuery = `
+                UPDATE daily_record 
+                SET mood_id = ?, exercise_id = ?, sleep_id = ?, socialisation_id = ?, productivity_score = ?
+                WHERE daily_record_id = ?
+            `;
+
+            db.query(updateQuery, [mood_id, exercise_id, sleep_id, socialisation_id, productivity_score, dailyRecordId], (err) => {
+                if (err) {
+                    console.error('Error updating daily record:', err);
+                    return res.status(500).json({ message: 'Failed to update daily record' });
+                }
+
+                // Update tags
+                updateTags(dailyRecordId, tags, student_id, res);
+            });
+        } else {
+            // Insert new record
+            const insertQuery = `
+                INSERT INTO daily_record (student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            `;
+
+            db.query(insertQuery, [student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score], (err, result) => {
+                if (err) {
+                    console.error('Error inserting daily record:', err);
+                    return res.status(500).json({ message: 'Failed to add daily record' });
+                }
+
+                const dailyRecordId = result.insertId;
+
+                // Insert tags
+                updateTags(dailyRecordId, tags, student_id, res);
+            });
+        }
+    });
+});
+
+const updateTags = (dailyRecordId, tags, student_id, res) => {
+    const deleteTagsQuery = `
+        DELETE FROM daily_record_tag 
+        WHERE daily_record_id = ?
+    `;
+
+    db.query(deleteTagsQuery, [dailyRecordId], (err) => {
+        if (err) {
+            console.error('Error deleting daily record tags:', err);
+            return res.status(500).json({ message: 'Failed to delete daily record tags' });
         }
 
-        const insertQuery = `
-            INSERT INTO daily_record (student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        `;
-
-        db.query(insertQuery, [student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score], (err, result) => {
-            if (err) {
-                console.error('Error inserting daily record:', err);
-                return res.status(500).json({ message: 'Failed to add daily record' });
-            }
-
-            const dailyRecordId = result.insertId;
-
-            // Insert tags into daily_record_tag table
+        if (tags && tags.length > 0) {
             const tagInserts = tags.map(tag_id => [dailyRecordId, tag_id]);
             const insertTagsQuery = `
                 INSERT INTO daily_record_tag (daily_record_id, tag_id) VALUES ?
@@ -578,91 +753,125 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                     return res.status(500).json({ message: 'Failed to add daily record tags' });
                 }
 
-                const getLastRecordQuery = `
-                SELECT DATE(daily_record_timestamp) as last_record_date 
-                FROM daily_record 
-                WHERE student_id = ? 
-                ORDER BY daily_record_timestamp DESC 
-                LIMIT 1
-            `;
+                updateStreakAndRespond(student_id, res);
+            });
+        } else {
+            updateStreakAndRespond(student_id, res);
+        }
+    });
+};
 
-                db.query(getLastRecordQuery, [student_id], (err, lastRecords) => {
-                    if (err) {
-                        console.error('Error fetching last record:', err);
-                        return res.status(500).json({ message: 'Failed to fetch last record' });
-                    }
+const updateStreakAndRespond = (student_id, res) => {
+    const getLastRecordQuery = `
+        SELECT DATE(daily_record_timestamp) as last_record_date 
+        FROM daily_record 
+        WHERE student_id = ? 
+        ORDER BY daily_record_timestamp DESC 
+        LIMIT 1
+    `;
 
-                    const getCurrentStreakQuery = `
-                    SELECT streak_value 
-                    FROM streak 
+    db.query(getLastRecordQuery, [student_id], (err, lastRecords) => {
+        if (err) {
+            console.error('Error fetching last record:', err);
+            return res.status(500).json({ message: 'Failed to fetch last record' });
+        }
+
+        const getCurrentStreakQuery = `
+            SELECT streak_value 
+            FROM streak 
+            WHERE student_id = ?
+        `;
+
+        db.query(getCurrentStreakQuery, [student_id], (err, streaks) => {
+            if (err) {
+                console.error('Error fetching streak:', err);
+                return res.status(500).json({ message: 'Failed to fetch streak' });
+            }
+
+            let streakValue = 1;
+
+            if (streaks.length > 0) {
+                streakValue = streaks[0].streak_value;
+            }
+
+            if (lastRecords.length > 0) {
+                const lastRecordDate = new Date(lastRecords[0].last_record_date);
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+
+                const lastRecordDateStr = lastRecordDate.toISOString().split('T')[0];
+                const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+                if (lastRecordDateStr === yesterdayStr) {
+                    streakValue += 1;
+                } else {
+                    streakValue = 1; // Reset streak if the last record is not from yesterday
+                }
+            }
+
+            if (streaks.length > 0) {
+                const updateStreakQuery = `
+                    UPDATE streak 
+                    SET streak_value = ? 
                     WHERE student_id = ?
                 `;
 
-                    db.query(getCurrentStreakQuery, [student_id], (err, streaks) => {
-                        if (err) {
-                            console.error('Error fetching streak:', err);
-                            return res.status(500).json({ message: 'Failed to fetch streak' });
-                        }
+                db.query(updateStreakQuery, [streakValue, student_id], (err) => {
+                    if (err) {
+                        console.error('Error updating streak:', err);
+                        return res.status(500).json({ message: 'Failed to update streak' });
+                    }
 
-                        let streakValue = 1;
-
-                        if (streaks.length > 0) {
-                            streakValue = streaks[0].streak_value;
-                        }
-
-                        if (lastRecords.length > 0) {
-                            const lastRecordDate = new Date(lastRecords[0].last_record_date);
-                            const yesterday = new Date();
-                            yesterday.setDate(yesterday.getDate() - 1);
-
-                            const lastRecordDateStr = lastRecordDate.toISOString().split('T')[0];
-                            // console.log('last record date: ', lastRecordDateStr);
-                            const yesterdayStr = yesterday.toISOString().split('T')[0];
-                            // console.log('yesterdayStr:', yesterdayStr);
-
-                            if (lastRecordDateStr === yesterdayStr) {
-                                streakValue += 1;
-                            } else {
-                                streakValue = 1; // Reset streak if the last record is not from yesterday
-                            }
-                        }
-
-                        if (streaks.length > 0) {
-                            const updateStreakQuery = `
-                            UPDATE streak 
-                            SET streak_value = ? 
-                            WHERE student_id = ?
-                        `;
-
-                            db.query(updateStreakQuery, [streakValue, student_id], (err) => {
-                                if (err) {
-                                    console.error('Error updating streak:', err);
-                                    return res.status(500).json({ message: 'Failed to update streak' });
-                                }
-
-                                return res.json({ message: 'Daily record and streak updated successfully', streakValue });
-                            });
-                        } else {
-                            const insertStreakQuery = `
-                            INSERT INTO streak (streak_value, student_id) 
-                            VALUES (?, ?)
-                        `;
-
-                            db.query(insertStreakQuery, [streakValue, student_id], (err) => {
-                                if (err) {
-                                    console.error('Error inserting streak:', err);
-                                    return res.status(500).json({ message: 'Failed to add streak' });
-                                }
-
-                                return res.json({ message: 'Daily record and streak added successfully', streakValue });
-                            });
-                        }
-                    });
+                    return res.json({ message: 'Daily record and streak updated successfully', streakValue });
                 });
-            });
+            } else {
+                const insertStreakQuery = `
+                    INSERT INTO streak (streak_value, student_id) 
+                    VALUES (?, ?)
+                `;
+
+                db.query(insertStreakQuery, [streakValue, student_id], (err) => {
+                    if (err) {
+                        console.error('Error inserting streak:', err);
+                        return res.status(500).json({ message: 'Failed to add streak' });
+                    }
+
+                    return res.json({ message: 'Daily record and streak added successfully', streakValue });
+                });
+            }
         });
     });
+};
+
+
+app.get('/api/daily-track/:studentId', verifyTokenStudent, (req, res) => {
+    const studentId = req.params.studentId;
+    const today = new Date().toISOString().split('T')[0];
+
+    const query = `
+        SELECT dr.*, GROUP_CONCAT(drt.tag_id) AS tags 
+        FROM daily_record dr
+        LEFT JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
+        WHERE dr.student_id = ? AND DATE(dr.daily_record_timestamp) = ?
+        GROUP BY dr.daily_record_id
+    `;
+
+    db.query(query, [studentId, today], (err, rows) => {
+        if (err) {
+            console.error('Error fetching daily record:', err);
+            return res.status(500).send('Failed to fetch daily record');
+        }
+
+        if (rows.length === 0) {
+            return res.status(404).send('No daily record found for today');
+        }
+
+        const record = rows[0];
+        record.tags = record.tags ? record.tags.split(',').map(Number) : [];
+        res.json(record);
+    });
 });
+
 
 app.post('/api/logout', (req, res) => {
     // Simply return a success response indicating logout
@@ -769,19 +978,58 @@ app.get('/api/staff-details/:staff_id', verifyTokenStaff, (req, res) => {
 
 app.get('/api/streak/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
-    const getStreakQuery = `SELECT streak_value FROM streak WHERE student_id = ?`;
 
-    db.query(getStreakQuery, [studentId], (err, streaks) => {
+    // Get today's date and yesterday's date
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const formatDate = (date) => date.toISOString().split('T')[0];
+
+    // Query to check if there was a record yesterday
+    const checkYesterdayQuery = `
+        SELECT COUNT(*) as count FROM daily_record 
+        WHERE student_id = ? 
+        AND DATE(daily_record_timestamp) = ?
+    `;
+
+    db.query(checkYesterdayQuery, [studentId, formatDate(yesterday)], (err, results) => {
         if (err) {
-            console.error('Error fetching streak:', err);
-            return res.status(500).json({ message: 'Failed to fetch streak' });
+            console.error('Error checking yesterday record:', err);
+            return res.status(500).json({ message: 'Failed to check yesterday\'s record' });
         }
 
-        if (streaks.length > 0) {
-            const streakValue = streaks[0].streak_value;
-            return res.json({ streakValue: streakValue });
+        const recordExists = results[0].count > 0;
+
+        if (recordExists) {
+            // If there was a record yesterday, return the current streak
+            const getStreakQuery = `SELECT streak_value FROM streak WHERE student_id = ?`;
+
+            db.query(getStreakQuery, [studentId], (err, streaks) => {
+                if (err) {
+                    console.error('Error fetching streak:', err);
+                    return res.status(500).json({ message: 'Failed to fetch streak' });
+                }
+
+                if (streaks.length > 0) {
+                    const streakValue = streaks[0].streak_value;
+                    return res.json({ streakValue: streakValue });
+                } else {
+                    return res.json({ streakValue: 0 });
+                }
+            });
         } else {
-            return res.json({ streakValue: 0 });
+            // If there was no record yesterday, reset the streak to 0
+            const resetStreakQuery = `UPDATE streak SET streak_value = 0 WHERE student_id = ?`;
+
+            db.query(resetStreakQuery, [studentId], (err) => {
+                if (err) {
+                    console.error('Error resetting streak:', err);
+                    return res.status(500).json({ message: 'Failed to reset streak' });
+                }
+
+                return res.json({ streakValue: 0 });
+            });
         }
     });
 });
@@ -1547,6 +1795,91 @@ app.get('/api/recommended-resources/:student_id', verifyTokenStudent, async (req
     }
 });
 
+app.get('/api/personalised-resources/:student_id', verifyTokenStudent, async (req, res) => {
+    const studentId = req.params.student_id;
+
+    try {
+        // Calculate the 3-day average for each metric
+        const threeDayAvgQuery = `
+            SELECT
+                AVG(m.mood_score) AS avg_mood,
+                AVG(e.exercise_score) AS avg_exercise,
+                AVG(sl.sleep_score) AS avg_sleep,
+                AVG(s.socialisation_score) AS avg_socialisation,
+                AVG(dr.productivity_score) AS avg_productivity
+            FROM daily_record dr
+            JOIN moods m ON dr.mood_id = m.mood_id
+            JOIN exercise e ON dr.exercise_id = e.exercise_id
+            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+            WHERE dr.student_id = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 3 DAY)
+            GROUP BY dr.student_id;
+        `;
+
+        const [avgResults] = await db.promise().query(threeDayAvgQuery, [studentId]);
+        const averages = avgResults[0];
+
+        // Build the list of topics to query
+        const struggles = [];
+        if (averages.avg_mood < 2.5) struggles.push('Mood');
+        if (averages.avg_exercise < 2.5) struggles.push('Exercise');
+        if (averages.avg_sleep < 2.5) struggles.push('Sleep');
+        if (averages.avg_socialisation < 2.5) struggles.push('Socialisation');
+        if (averages.avg_productivity < 2.5) struggles.push('Productivity');
+
+        console.log('Average Mood: ', averages.avg_mood);
+        console.log('Average Exercise: ', averages.avg_exercise);
+        console.log('Average Sleep: ', averages.avg_sleep);
+        console.log('Average Socialisation: ', averages.avg_socialisation);
+        console.log('Average Productivity: ', averages.avg_productivity);
+        // Check for specific tags logged more than 2 times in the last 5 days
+        const tagsQuery = `
+            SELECT t.tag_name
+            FROM daily_record_tag drt
+            JOIN tag t ON drt.tag_id = t.tag_id
+            JOIN daily_record dr ON dr.daily_record_id = drt.daily_record_id
+            WHERE dr.student_id = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 5 DAY)
+            GROUP BY t.tag_name
+            HAVING COUNT(*) >= 2;
+        `;
+
+        const [tagsResults] = await db.promise().query(tagsQuery, [studentId]);
+        const frequentTags = tagsResults.map(row => row.tag_name);
+
+        const topics = [...struggles, ...frequentTags];
+
+        if (topics.length === 0) {
+            return res.json({ message: '', recommendedResources: [] });
+        }
+
+        // Select only the first 3 topics
+        const selectedTopics = topics.slice(0, 3);
+
+        // Construct the message
+        let message = 'We can see you are struggling with ';
+        if (selectedTopics.length === 1) {
+            message += `${selectedTopics[0]}. Here are some recommended resources to help:`;
+        } else if (selectedTopics.length === 2) {
+            message += `${selectedTopics[0]} and ${selectedTopics[1]}. Here are some recommended resources to help:`;
+        } else {
+            message += `${selectedTopics[0]}, ${selectedTopics[1]}, and ${selectedTopics[2]}. Here are some recommended resources to help:`;
+        }
+
+        // Prepare and execute the resource query
+        const resourceQuery = `
+            SELECT r.resource_name, r.resource_link, rt.resource_topic_name
+            FROM resources r
+            JOIN resource_topic rt ON rt.resource_topic_id = r.resource_topic_id
+            WHERE rt.resource_topic_name IN (${selectedTopics.map(() => '?').join(', ')})
+        `;
+        const [resources] = await db.promise().query(resourceQuery, selectedTopics);
+
+        res.json({ message, recommendedResources: resources });
+    } catch (error) {
+        console.error('Error fetching personalised resources:', error);
+        res.status(500).json({ message: 'Failed to fetch personalised resources' });
+    }
+});
 
 app.post('/api/send-email', verifyTokenStaff, async (req, res) => {
     const { to, subject, message } = req.body;
@@ -1616,7 +1949,344 @@ app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) =
     }
 });
 
+app.get('/api/weekly-averages', verifyTokenStaff, async (req, res) => {
+    try {
+        // Query to get averages by academic year
+        const yearQuery = `
+            SELECT ay.academic_year_name,
+                   AVG(m.mood_score) as avg_mood,
+                   AVG(e.exercise_score) as avg_exercise,
+                   AVG(sl.sleep_score) as avg_sleep,
+                   AVG(s.socialisation_score) as avg_socialisation,
+                   AVG(dr.productivity_score) as avg_productivity
+            FROM daily_record dr
+            JOIN student st ON st.student_id = dr.student_id
+            JOIN academic_year ay ON ay.academic_year_id = st.course_year_id
+            JOIN moods m ON dr.mood_id = m.mood_id
+            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+            JOIN exercise e ON dr.exercise_id = e.exercise_id
+            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+            WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            GROUP BY ay.academic_year_name
+            ORDER BY ay.academic_year_name
+        `;
 
+        // Query to get averages by course
+        const courseQuery = `
+            SELECT c.course_name,
+                   AVG(m.mood_score) as avg_mood,
+                   AVG(e.exercise_score) as avg_exercise,
+                   AVG(sl.sleep_score) as avg_sleep,
+                   AVG(s.socialisation_score) as avg_socialisation,
+                   AVG(dr.productivity_score) as avg_productivity
+            FROM daily_record dr
+            JOIN student st ON st.student_id = dr.student_id
+            JOIN course c ON c.course_id = st.course_id
+            JOIN moods m ON dr.mood_id = m.mood_id
+            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+            JOIN exercise e ON dr.exercise_id = e.exercise_id
+            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+            WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            GROUP BY c.course_name
+            ORDER BY c.course_name
+        `;
+
+        // Execute both queries in parallel
+        const [yearResults, courseResults] = await Promise.all([
+            new Promise((resolve, reject) => {
+                db.query(yearQuery, (err, results) => {
+                    if (err) reject(err);
+                    else resolve(results);
+                });
+            }),
+            new Promise((resolve, reject) => {
+                db.query(courseQuery, (err, results) => {
+                    if (err) reject(err);
+                    else resolve(results);
+                });
+            }),
+        ]);
+
+        // Send the combined response
+        res.json({
+            yearAverages: yearResults,
+            courseAverages: courseResults,
+        });
+
+    } catch (error) {
+        console.error('Error fetching weekly averages:', error);
+        res.status(500).json({ message: 'Failed to fetch weekly averages' });
+    }
+});
+
+app.get('/api/export-dailytrack-csv', verifyTokenStaff, async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                dr.daily_record_timestamp AS 'Time', 
+                s.student_number AS 'Student Number', 
+                s.student_name AS 'Name', 
+                s.date_of_birth AS 'Date of Birth', 
+                e.exercise_name AS 'Exercise Length', 
+                e.exercise_score AS 'Exercise Score', 
+                m.mood_name AS 'Mood', 
+                m.mood_score AS 'Mood Score', 
+                so.socialisation_name AS 'Socialisation Name', 
+                so.socialisation_score AS 'Socialisation Score', 
+                GROUP_CONCAT(t.tag_name SEPARATOR '; ') AS 'Tags'
+            FROM daily_record dr 
+            LEFT JOIN student s ON s.student_id = dr.student_id
+            LEFT JOIN daily_record_tag drt ON drt.daily_record_id = dr.daily_record_id
+            LEFT JOIN exercise e ON e.exercise_id = dr.exercise_id
+            LEFT JOIN moods m ON dr.mood_id = m.mood_id
+            LEFT JOIN sleep sl ON sl.sleep_id = dr.sleep_id
+            LEFT JOIN socialisation so ON so.socialisation_id = dr.socialisation_id 
+            LEFT JOIN tag t ON t.tag_id = drt.tag_id
+            GROUP BY dr.daily_record_timestamp, s.student_number, s.student_name, s.date_of_birth, 
+                     e.exercise_name, e.exercise_score, m.mood_name, m.mood_score, 
+                     so.socialisation_name, so.socialisation_score;
+        `;
+
+        db.query(query, (err, results) => {
+            if (err) {
+                console.error('Error fetching daily track data:', err);
+                return res.status(500).json({ message: 'Failed to fetch data' });
+            }
+
+            // Convert the results to CSV
+            const json2csvParser = new Parser();
+            const csv = json2csvParser.parse(results);
+
+            // Generate the filename with the current date and time
+            const currentDateTime = moment().format('YYYYMMDD_HHmmss');
+            const filename = `DailyTrack_${currentDateTime}.csv`;
+
+            // Set the response headers to trigger a file download
+            res.header('Content-Type', 'text/csv');
+            res.attachment(filename);
+            res.send(csv);
+        });
+    } catch (error) {
+        console.error('Error exporting daily track data:', error);
+        res.status(500).json({ message: 'Failed to export data' });
+    }
+});
+
+app.get('/api/export-studentlist-csv', verifyTokenStaff, async (req, res) => {
+    try {
+        const query = `
+            SELECT  
+                s.student_number AS 'Student Number', 
+                s.student_name AS 'Name', 
+                s.date_of_birth AS 'Date of Birth', 
+                s.student_email AS 'Email Address', 
+                c.course_name AS 'Course', 
+                ay.academic_year_name AS 'Year Group', 
+                GROUP_CONCAT(CONCAT(a.assignment_name, ' (Due: ', DATE_FORMAT(a.assignment_deadline, '%Y-%m-%d'), ')') SEPARATOR '; ') AS 'Assignments'
+            FROM student s 
+            LEFT JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
+            LEFT JOIN assignment a ON a.student_id = s.student_id
+            LEFT JOIN course c ON c.course_id = s.course_id
+            LEFT JOIN streak st ON st.student_id = s.student_id
+            GROUP BY s.student_id, s.student_number, s.student_name, s.date_of_birth, s.student_email, c.course_name, ay.academic_year_name;
+        `;
+
+        db.query(query, (err, results) => {
+            if (err) {
+                console.error('Error fetching student list:', err);
+                return res.status(500).json({ message: 'Failed to fetch data' });
+            }
+
+            // Convert the results to CSV
+            const json2csvParser = new Parser();
+            const csv = json2csvParser.parse(results);
+
+            // Generate the filename with the current date and time
+            const currentDateTime = moment().format('YYYYMMDD_HHmmss');
+            const filename = `StudentList_${currentDateTime}.csv`;
+
+            // Set the response headers to trigger a file download
+            res.header('Content-Type', 'text/csv');
+            res.attachment(filename);
+            res.send(csv);
+        });
+    } catch (error) {
+        console.error('Error exporting student list:', error);
+        res.status(500).json({ message: 'Failed to export data' });
+    }
+});
+
+app.get('/api/student-insights/:student_id', verifyTokenStudent, async (req, res) => {
+    const studentId = req.params.student_id;
+
+    try {
+        // Calculate the start and end dates for the current and previous weeks
+        const endOfCurrentWeek = new Date();
+        const startOfCurrentWeek = new Date();
+        startOfCurrentWeek.setDate(endOfCurrentWeek.getDate() - 6);
+
+        const endOfPreviousWeek = new Date(startOfCurrentWeek);
+        endOfPreviousWeek.setDate(startOfCurrentWeek.getDate() - 1);
+        const startOfPreviousWeek = new Date(endOfPreviousWeek);
+        startOfPreviousWeek.setDate(endOfPreviousWeek.getDate() - 6);
+
+        // Format dates for SQL queries
+        const formatDate = (date) => date.toISOString().split('T')[0];
+
+        // Log the calculated week ranges
+        console.log("Current Week:", formatDate(startOfCurrentWeek), "to", formatDate(endOfCurrentWeek));
+        console.log("Previous Week:", formatDate(startOfPreviousWeek), "to", formatDate(endOfPreviousWeek));
+
+        // Fetch records for the current week
+        const currentWeekQuery = `
+            SELECT 
+                dr.daily_record_timestamp, 
+                m.mood_score, 
+                e.exercise_score, 
+                sl.sleep_score, 
+                s.socialisation_score, 
+                dr.productivity_score
+            FROM daily_record dr
+            JOIN moods m ON dr.mood_id = m.mood_id
+            JOIN exercise e ON dr.exercise_id = e.exercise_id
+            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+            WHERE dr.student_id = ? 
+            AND dr.daily_record_timestamp BETWEEN ? AND ?
+            ORDER BY dr.daily_record_timestamp DESC;
+        `;
+        const [currentWeekRecords] = await db.promise().query(currentWeekQuery, [studentId, formatDate(startOfCurrentWeek), formatDate(endOfCurrentWeek)]);
+
+        // Fetch records for the previous week
+        const previousWeekQuery = `
+            SELECT 
+                dr.daily_record_timestamp, 
+                m.mood_score, 
+                e.exercise_score, 
+                sl.sleep_score, 
+                s.socialisation_score, 
+                dr.productivity_score
+            FROM daily_record dr
+            JOIN moods m ON dr.mood_id = m.mood_id
+            JOIN exercise e ON dr.exercise_id = e.exercise_id
+            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+            WHERE dr.student_id = ? 
+            AND dr.daily_record_timestamp BETWEEN ? AND ?
+            ORDER BY dr.daily_record_timestamp DESC;
+        `;
+        const [previousWeekRecords] = await db.promise().query(previousWeekQuery, [studentId, formatDate(startOfPreviousWeek), formatDate(endOfPreviousWeek)]);
+
+        // Log fetched records
+        console.log("Current Week Records:", currentWeekRecords.length);
+        console.log("Previous Week Records:", previousWeekRecords.length);
+
+        let insights = [];
+
+        // Ensure both weeks have data
+        if (currentWeekRecords.length > 0 && previousWeekRecords.length > 0) {
+            const calculateAverage = (records, key) => {
+                return records.reduce((sum, record) => sum + record[key], 0) / records.length;
+            };
+
+            const averagesCurrentWeek = {
+                mood: calculateAverage(currentWeekRecords, 'mood_score'),
+                exercise: calculateAverage(currentWeekRecords, 'exercise_score'),
+                sleep: calculateAverage(currentWeekRecords, 'sleep_score'),
+                socialisation: calculateAverage(currentWeekRecords, 'socialisation_score'),
+                productivity: calculateAverage(currentWeekRecords, 'productivity_score')
+            };
+
+            const averagesPreviousWeek = {
+                mood: calculateAverage(previousWeekRecords, 'mood_score'),
+                exercise: calculateAverage(previousWeekRecords, 'exercise_score'),
+                sleep: calculateAverage(previousWeekRecords, 'sleep_score'),
+                socialisation: calculateAverage(previousWeekRecords, 'socialisation_score'),
+                productivity: calculateAverage(previousWeekRecords, 'productivity_score')
+            };
+
+            // Log calculated averages
+            console.log("Averages Current Week:", averagesCurrentWeek);
+            console.log("Averages Previous Week:", averagesPreviousWeek);
+
+            const generateInsight = (metric, label) => {
+                if (averagesCurrentWeek[metric] > averagesPreviousWeek[metric]) {
+                    insights.push(`Great job! Your ${label} has improved this week. Keep it up!`);
+                } else if (averagesCurrentWeek[metric] < averagesPreviousWeek[metric]) {
+                    insights.push(`We've noticed a decline in your ${label} this week. Consider focusing on improving it.`);
+                }
+            };
+
+            generateInsight('mood', 'mood');
+            generateInsight('exercise', 'exercise');
+            generateInsight('sleep', 'sleep quality');
+            generateInsight('socialisation', 'socialisation');
+            generateInsight('productivity', 'productivity');
+
+              // Calculate correlations
+              const sleepMoodCorrelation = analyzeCorrelation(currentWeekRecords, 'sleep_score', 'mood_score');
+              const exerciseMoodCorrelation = analyzeCorrelation(currentWeekRecords, 'exercise_score', 'mood_score');
+              const socialisationMoodCorrelation = analyzeCorrelation(currentWeekRecords, 'socialisation_score', 'mood_score');
+              const moodProductivityCorrelation = analyzeCorrelation(currentWeekRecords, 'mood_score', 'productivity_score');
+              const sleepProductivityCorrelation = analyzeCorrelation(currentWeekRecords, 'sleep_score', 'productivity_score');
+              const exerciseProductivityCorrelation = analyzeCorrelation(currentWeekRecords, 'exercise_score', 'productivity_score');
+  
+          
+              if (sleepMoodCorrelation > 0.5 && averagesCurrentWeek.mood < 3 && averagesCurrentWeek.sleep < 3) {
+                  insights.push("We've noticed sleep has a positive effect on your mood. Try to get better sleep to improve your mood.");
+              }
+  
+              if (exerciseMoodCorrelation > 0.5 && averagesCurrentWeek.mood < 3 && averagesCurrentWeek.exercise < 3) {
+                  insights.push("We've noticed exercise has a positive effect on your mood. Try to fit in some exercise to improve your mood.");
+              }
+  
+              if (socialisationMoodCorrelation > 0.5 && averagesCurrentWeek.mood < 3 && averagesCurrentWeek.socialisation < 3) {
+                  insights.push("You are experiencing low mood. Socializing often improves your mood, consider connecting with friends.");
+              }
+  
+              if (moodProductivityCorrelation > 0.5 && averagesCurrentWeek.productivity < 3 && averagesCurrentWeek.mood < 3) {
+                  insights.push("Your mood seems to impact your productivity. Improving your mood may help boost your productivity.");
+              }
+  
+              if (sleepProductivityCorrelation > 0.5 && averagesCurrentWeek.productivity < 3 && averagesCurrentWeek.sleep < 3) {
+                  insights.push("We've noticed that sleep positively affects your productivity. Better sleep could lead to higher productivity.");
+              }
+  
+              if (exerciseProductivityCorrelation > 0.5 && averagesCurrentWeek.productivity < 3 && averagesCurrentWeek.exercise < 3) {
+                  insights.push("Exercise seems to boost your productivity. Incorporating more physical activity could help improve your focus.");
+              }
+          } else {
+              insights.push("Not enough data to generate weekly insights. Please keep tracking your activities.");
+          }
+  
+        // Log final insights
+        console.log("Generated Insights:", insights);
+
+        res.json({ insights });
+    } catch (error) {
+        console.error('Error generating student insights:', error);
+        res.status(500).json({ message: 'Failed to generate insights' });
+    }
+});
+
+// A simple correlation analysis function (example logic)
+function analyzeCorrelation(records, metric1, metric2) {
+    let sumMetric1 = 0, sumMetric2 = 0, sumMetric1Metric2 = 0, sumMetric1Square = 0, sumMetric2Square = 0;
+    const n = records.length;
+
+    records.forEach(record => {
+        sumMetric1 += record[metric1];
+        sumMetric2 += record[metric2];
+        sumMetric1Metric2 += record[metric1] * record[metric2];
+        sumMetric1Square += record[metric1] * record[metric1];
+        sumMetric2Square += record[metric2] * record[metric2];
+    });
+
+    const numerator = (n * sumMetric1Metric2) - (sumMetric1 * sumMetric2);
+    const denominator = Math.sqrt((n * sumMetric1Square - sumMetric1 * sumMetric1) * (n * sumMetric2Square - sumMetric2 * sumMetric2));
+
+    return denominator !== 0 ? numerator / denominator : 0;
+}
 
 
 app.listen(8000, () => {
