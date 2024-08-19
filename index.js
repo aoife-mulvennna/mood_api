@@ -50,7 +50,7 @@ const testEmailAddress = 'amulvenna10@qub.ac.uk';
 
 
 // CRON Jobs
-// Schedule a job to run every day at midnight to alert student that thney have not recorded in 5 days (currently set to 1 minute)
+// Schedule a job to run every day at midnight to alert student that they have not recorded in 5 days (currently set to 1 minute)
 cron.schedule('0 0 * * *', async () => {
     try {
         const checkQuery = `
@@ -1013,8 +1013,8 @@ const cooldownPeriodSeconds = 1 * 60 * 60;
 app.post('/api/quick-track', verifyTokenStudent, (req, res) => {
     const studentId = req.user.student_id; // Ensure this line correctly retrieves student_id
     const { mood_id } = req.body;
-// Inside verifyTokenStudent middleware
-console.log('Student ID:', req.user.student_id);
+    // Inside verifyTokenStudent middleware
+    console.log('Student ID:', req.user.student_id);
 
     // Check if studentId is defined
     if (!studentId) {
@@ -1032,7 +1032,7 @@ console.log('Student ID:', req.user.student_id);
             return res.status(500).json({ error: 'Failed to check last submission' });
         }
 
-        console.log('Last Submission Results:', results); 
+        console.log('Last Submission Results:', results);
 
         if (results.length > 0) {
             const lastSubmissionTime = new Date(results[0].quick_track_timestamp);
@@ -1142,16 +1142,25 @@ app.get('/api/records/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
 
     const getRecordsQuery = `
-        SELECT * FROM daily_record dr 
+            SELECT dr.daily_record_timestamp AS record_timestamp, m.mood_score, s.socialisation_score, e.exercise_score, sl.sleep_score 
+        FROM daily_record dr 
         JOIN moods m ON m.mood_id = dr.mood_id
         JOIN socialisation s ON s.socialisation_id = dr.socialisation_id
         JOIN exercise e ON e.exercise_id = dr.exercise_id
         JOIN sleep sl ON sl.sleep_id = dr.sleep_id
         WHERE dr.student_id = ?
-        ORDER BY daily_record_timestamp DESC
+
+        UNION ALL
+
+        SELECT qt.quick_track_timestamp AS record_timestamp, m.mood_score, NULL AS socialisation_score, NULL AS exercise_score, NULL AS sleep_score 
+        FROM quick_track qt
+        JOIN moods m ON m.mood_id = qt.mood_id
+        WHERE qt.student_id = ?
+
+        ORDER BY record_timestamp DESC;
         `;
 
-    db.query(getRecordsQuery, [studentId], (err, records) => {
+    db.query(getRecordsQuery, [studentId, studentId], (err, records) => {
         if (err) {
             console.error('Error fetching records:', err);
             return res.status(500).json({ message: 'Failed to fetch records' });
@@ -1243,14 +1252,23 @@ app.get('/api/mood-scores/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
 
     const getMoodScoresQuery = `
-        SELECT m.mood_score,m.mood_name, dr.daily_record_timestamp
-        FROM daily_record dr
-        JOIN moods m ON m.mood_id = dr.mood_id
-        WHERE dr.student_id = ?
-        ORDER BY dr.daily_record_timestamp ASC
+        SELECT m.mood_score, m.mood_name, combined.record_timestamp
+        FROM (
+            SELECT dr.daily_record_timestamp as record_timestamp, dr.mood_id
+            FROM daily_record dr
+            WHERE dr.student_id = ?
+
+            UNION ALL
+
+            SELECT qt.quick_track_timestamp as record_timestamp, qt.mood_id
+            FROM quick_track qt
+            WHERE qt.student_id = ?
+        ) as combined
+        JOIN moods m ON m.mood_id = combined.mood_id
+        ORDER BY combined.record_timestamp ASC
     `;
 
-    db.query(getMoodScoresQuery, [studentId], (err, results) => {
+    db.query(getMoodScoresQuery, [studentId, studentId], (err, results) => {
         if (err) {
             console.error('Error fetching mood scores:', err);
             return res.status(500).json({ message: 'Failed to fetch mood scores' });
@@ -2066,42 +2084,90 @@ app.get('/api/weekly-averages', verifyTokenStaff, async (req, res) => {
     try {
         // Query to get averages by academic year
         const yearQuery = `
-            SELECT ay.academic_year_name,
-                   AVG(m.mood_score) as avg_mood,
-                   AVG(e.exercise_score) as avg_exercise,
-                   AVG(sl.sleep_score) as avg_sleep,
-                   AVG(s.socialisation_score) as avg_socialisation,
-                   AVG(dr.productivity_score) as avg_productivity
-            FROM daily_record dr
-            JOIN student st ON st.student_id = dr.student_id
-            JOIN academic_year ay ON ay.academic_year_id = st.course_year_id
-            JOIN moods m ON dr.mood_id = m.mood_id
-            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
-            JOIN exercise e ON dr.exercise_id = e.exercise_id
-            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-            WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-            GROUP BY ay.academic_year_name
-            ORDER BY ay.academic_year_name
+  SELECT combined.academic_year_name,
+                   AVG(combined.mood_score) as avg_mood,
+                   AVG(combined.exercise_score) as avg_exercise,
+                   AVG(combined.sleep_score) as avg_sleep,
+                   AVG(combined.socialisation_score) as avg_socialisation,
+                   AVG(combined.productivity_score) as avg_productivity
+            FROM (
+                SELECT dr.daily_record_timestamp as record_date,
+                       m.mood_score,
+                       e.exercise_score,
+                       sl.sleep_score,
+                       s.socialisation_score,
+                       dr.productivity_score,
+                       ay.academic_year_name
+                FROM daily_record dr
+                JOIN student st ON st.student_id = dr.student_id
+                JOIN academic_year ay ON ay.academic_year_id = st.course_year_id
+                JOIN moods m ON dr.mood_id = m.mood_id
+                JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+                JOIN exercise e ON dr.exercise_id = e.exercise_id
+                JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+                WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+
+                UNION ALL
+
+                SELECT qt.quick_track_timestamp as record_date,
+                       m.mood_score,
+                       NULL as exercise_score,
+                       NULL as sleep_score,
+                       NULL as socialisation_score,
+                       NULL as productivity_score,
+                       ay.academic_year_name
+                FROM quick_track qt
+                JOIN student st ON st.student_id = qt.student_id
+                JOIN academic_year ay ON ay.academic_year_id = st.course_year_id
+                JOIN moods m ON qt.mood_id = m.mood_id
+                WHERE qt.quick_track_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            ) as combined
+            GROUP BY combined.academic_year_name
+            ORDER BY combined.academic_year_name
         `;
 
         // Query to get averages by course
         const courseQuery = `
-            SELECT c.course_name,
-                   AVG(m.mood_score) as avg_mood,
-                   AVG(e.exercise_score) as avg_exercise,
-                   AVG(sl.sleep_score) as avg_sleep,
-                   AVG(s.socialisation_score) as avg_socialisation,
-                   AVG(dr.productivity_score) as avg_productivity
-            FROM daily_record dr
-            JOIN student st ON st.student_id = dr.student_id
-            JOIN course c ON c.course_id = st.course_id
-            JOIN moods m ON dr.mood_id = m.mood_id
-            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
-            JOIN exercise e ON dr.exercise_id = e.exercise_id
-            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-            WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-            GROUP BY c.course_name
-            ORDER BY c.course_name
+        SELECT combined.course_name,
+                   AVG(combined.mood_score) as avg_mood,
+                   AVG(combined.exercise_score) as avg_exercise,
+                   AVG(combined.sleep_score) as avg_sleep,
+                   AVG(combined.socialisation_score) as avg_socialisation,
+                   AVG(combined.productivity_score) as avg_productivity
+            FROM (
+                SELECT dr.daily_record_timestamp as record_date,
+                       m.mood_score,
+                       e.exercise_score,
+                       sl.sleep_score,
+                       s.socialisation_score,
+                       dr.productivity_score,
+                       c.course_name
+                FROM daily_record dr
+                JOIN student st ON st.student_id = dr.student_id
+                JOIN course c ON c.course_id = st.course_id
+                JOIN moods m ON dr.mood_id = m.mood_id
+                JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+                JOIN exercise e ON dr.exercise_id = e.exercise_id
+                JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+                WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+
+                UNION ALL
+
+                SELECT qt.quick_track_timestamp as record_date,
+                       m.mood_score,
+                       NULL as exercise_score,
+                       NULL as sleep_score,
+                       NULL as socialisation_score,
+                       NULL as productivity_score,
+                       c.course_name
+                FROM quick_track qt
+                JOIN student st ON st.student_id = qt.student_id
+                JOIN course c ON c.course_id = st.course_id
+                JOIN moods m ON qt.mood_id = m.mood_id
+                WHERE qt.quick_track_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            ) as combined
+            GROUP BY combined.course_name
+            ORDER BY combined.course_name
         `;
 
         // Execute both queries in parallel
@@ -2249,42 +2315,88 @@ app.get('/api/student-insights/:student_id', verifyTokenStudent, async (req, res
         // Fetch records for the current week
         const currentWeekQuery = `
             SELECT 
-                dr.daily_record_timestamp, 
-                m.mood_score, 
-                e.exercise_score, 
-                sl.sleep_score, 
-                s.socialisation_score, 
-                dr.productivity_score
-            FROM daily_record dr
-            JOIN moods m ON dr.mood_id = m.mood_id
-            JOIN exercise e ON dr.exercise_id = e.exercise_id
-            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
-            WHERE dr.student_id = ? 
-            AND dr.daily_record_timestamp BETWEEN ? AND ?
-            ORDER BY dr.daily_record_timestamp DESC;
+                combined.record_date, 
+                combined.mood_score, 
+                combined.exercise_score, 
+                combined.sleep_score, 
+                combined.socialisation_score, 
+                combined.productivity_score
+            FROM (
+                SELECT 
+                    dr.daily_record_timestamp as record_date,
+                    m.mood_score,
+                    e.exercise_score,
+                    sl.sleep_score,
+                    s.socialisation_score,
+                    dr.productivity_score
+                FROM daily_record dr
+                JOIN moods m ON dr.mood_id = m.mood_id
+                JOIN exercise e ON dr.exercise_id = e.exercise_id
+                JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+                JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+                WHERE dr.student_id = ? 
+                AND dr.daily_record_timestamp BETWEEN ? AND ?
+                
+                UNION ALL
+                
+                SELECT 
+                    qt.quick_track_timestamp as record_date,
+                    m.mood_score,
+                    NULL as exercise_score,
+                    NULL as sleep_score,
+                    NULL as socialisation_score,
+                    NULL as productivity_score
+                FROM quick_track qt
+                JOIN moods m ON qt.mood_id = m.mood_id
+                WHERE qt.student_id = ?
+                AND qt.quick_track_timestamp BETWEEN ? AND ?
+            ) as combined
+            ORDER BY combined.record_date DESC;
         `;
-        const [currentWeekRecords] = await db.promise().query(currentWeekQuery, [studentId, formatDate(startOfCurrentWeek), formatDate(endOfCurrentWeek)]);
+        const [currentWeekRecords] = await db.promise().query(currentWeekQuery, [studentId, formatDate(startOfCurrentWeek), formatDate(endOfCurrentWeek), studentId, formatDate(startOfCurrentWeek), formatDate(endOfCurrentWeek)]);
 
         // Fetch records for the previous week
         const previousWeekQuery = `
-            SELECT 
-                dr.daily_record_timestamp, 
-                m.mood_score, 
-                e.exercise_score, 
-                sl.sleep_score, 
-                s.socialisation_score, 
-                dr.productivity_score
-            FROM daily_record dr
-            JOIN moods m ON dr.mood_id = m.mood_id
-            JOIN exercise e ON dr.exercise_id = e.exercise_id
-            JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-            JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
-            WHERE dr.student_id = ? 
-            AND dr.daily_record_timestamp BETWEEN ? AND ?
-            ORDER BY dr.daily_record_timestamp DESC;
+    SELECT 
+                combined.record_date, 
+                combined.mood_score, 
+                combined.exercise_score, 
+                combined.sleep_score, 
+                combined.socialisation_score, 
+                combined.productivity_score
+            FROM (
+                SELECT 
+                    dr.daily_record_timestamp as record_date,
+                    m.mood_score,
+                    e.exercise_score,
+                    sl.sleep_score,
+                    s.socialisation_score,
+                    dr.productivity_score
+                FROM daily_record dr
+                JOIN moods m ON dr.mood_id = m.mood_id
+                JOIN exercise e ON dr.exercise_id = e.exercise_id
+                JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+                JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
+                WHERE dr.student_id = ? 
+                AND dr.daily_record_timestamp BETWEEN ? AND ?
+
+                UNION ALL
+                
+                SELECT 
+                    qt.quick_track_timestamp as record_date,
+                    m.mood_score,
+                    NULL as exercise_score,
+                    NULL as sleep_score,
+                    NULL as socialisation_score,
+                    NULL as productivity_score
+                FROM quick_track qt
+                JOIN moods m ON qt.mood_id = m.mood_id
+                WHERE qt.student_id = ?
+                AND qt.quick_track_timestamp BETWEEN ? AND ?
+            ) as combined
+            ORDER BY combined.record_date DESC;
         `;
-        const [previousWeekRecords] = await db.promise().query(previousWeekQuery, [studentId, formatDate(startOfPreviousWeek), formatDate(endOfPreviousWeek)]);
+        const [previousWeekRecords] = await db.promise().query(previousWeekQuery, [studentId, formatDate(startOfPreviousWeek), formatDate(endOfPreviousWeek), studentId, formatDate(startOfPreviousWeek), formatDate(endOfPreviousWeek)]);
 
         let insights = [];
 
@@ -2361,7 +2473,7 @@ app.get('/api/student-insights/:student_id', verifyTokenStudent, async (req, res
         }
 
         // Log final insights
-        console.log("Generated Insights:", insights);
+        // console.log("Generated Insights:", insights);
 
         res.json({ insights });
     } catch (error) {
@@ -2428,25 +2540,48 @@ app.get('/api/yearly-metrics', verifyTokenStaff, (req, res) => {
     const { academicYear } = req.query;
 
     const query = `
-         SELECT DATE_FORMAT(dr.daily_record_timestamp, '%Y-%m-%d') as date,
-               AVG(m.mood_score) as mood,
-               AVG(e.exercise_score) as exercise,
-               AVG(sl.sleep_score) as sleep,
-               AVG(s.socialisation_score) as socialisation,
-               AVG(dr.productivity_score) as productivity
+         SELECT DATE_FORMAT(record_date, '%Y-%m-%d') as date,
+               AVG(mood_score) as mood,
+               AVG(exercise_score) as exercise,
+               AVG(sleep_score) as sleep,
+               AVG(socialisation_score) as socialisation,
+               AVG(productivity_score) as productivity
+        FROM (
+             SELECT dr.daily_record_timestamp as record_date,
+               m.mood_score,
+               e.exercise_score,
+               sl.sleep_score,
+               s.socialisation_score,
+               dr.productivity_score
         FROM daily_record dr
         JOIN student st ON st.student_id = dr.student_id
+        JOIN academic_year ay ON ay.academic_year_id= st.course_year_id
         JOIN moods m ON dr.mood_id = m.mood_id
         JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
         JOIN exercise e ON dr.exercise_id = e.exercise_id
         JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-        JOIN academic_year ay ON ay.academic_year_id = st.course_year_id
-        WHERE ay.academic_year_name = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
+        WHERE ay.academic_year_name = ?
+       
+        UNION ALL
+
+        SELECT qt.quick_track_timestamp as record_date,
+               m.mood_score,
+               NULL as exercise_score,
+               NULL as sleep_score,
+               NULL as socialisation_score,
+               NULL as productivity_score
+        FROM quick_track qt
+JOIN student st ON st.student_id = qt.student_id
+        JOIN academic_year ay ON ay.academic_year_id= st.course_year_id
+        JOIN moods m ON qt.mood_id = m.mood_id
+           WHERE ay.academic_year_name = ?
+            ) AS combined
+    WHERE record_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
         GROUP BY date
         ORDER BY date ASC;
     `;
 
-    db.query(query, [academicYear], (err, results) => {
+    db.query(query, [academicYear, academicYear], (err, results) => {
         if (err) {
             console.error('Error fetching yearly metrics:', err);
             return res.status(500).json({ message: 'Failed to fetch data' });
@@ -2464,12 +2599,19 @@ app.get('/api/course-metrics', verifyTokenStaff, (req, res) => {
     }
 
     const query = `
-        SELECT DATE_FORMAT(dr.daily_record_timestamp, '%Y-%m-%d') as date,
-               AVG(m.mood_score) as mood,
-               AVG(e.exercise_score) as exercise,
-               AVG(sl.sleep_score) as sleep,
-               AVG(s.socialisation_score) as socialisation,
-               AVG(dr.productivity_score) as productivity
+    SELECT DATE_FORMAT(record_date, '%Y-%m-%d') as date,
+           AVG(mood_score) as mood,
+           AVG(exercise_score) as exercise,
+           AVG(sleep_score) as sleep,
+           AVG(socialisation_score) as socialisation,
+           AVG(productivity_score) as productivity
+    FROM (
+        SELECT dr.daily_record_timestamp as record_date,
+               m.mood_score,
+               e.exercise_score,
+               sl.sleep_score,
+               s.socialisation_score,
+               dr.productivity_score
         FROM daily_record dr
         JOIN student st ON st.student_id = dr.student_id
         JOIN course c ON c.course_id = st.course_id
@@ -2477,18 +2619,59 @@ app.get('/api/course-metrics', verifyTokenStaff, (req, res) => {
         JOIN socialisation s ON dr.socialisation_id = s.socialisation_id
         JOIN exercise e ON dr.exercise_id = e.exercise_id
         JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-        WHERE c.course_name = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
-        GROUP BY date
-        ORDER BY date ASC;
-    `;
+        WHERE c.course_name = ?
 
-    db.query(query, [courseName], (err, results) => {
+        UNION ALL
+
+        SELECT qt.quick_track_timestamp as record_date,
+               m.mood_score,
+               NULL as exercise_score,
+               NULL as sleep_score,
+               NULL as socialisation_score,
+               NULL as productivity_score
+        FROM quick_track qt
+        JOIN student st ON st.student_id = qt.student_id
+        JOIN course c ON c.course_id = st.course_id
+        JOIN moods m ON qt.mood_id = m.mood_id
+        WHERE c.course_name = ?
+    ) AS combined
+    WHERE record_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
+    GROUP BY date
+    ORDER BY date ASC;
+`;
+
+    db.query(query, [courseName, courseName], (err, results) => {
         if (err) {
             console.error('Error fetching course metrics:', err);
             return res.status(500).json({ message: 'Failed to fetch data' });
         }
-
+        // results.forEach(result => {
+        //     console.log(`Date: ${result.date}, Average Mood: ${result.mood}`);
+        // });
         return res.json(results);
+    });
+});
+
+app.get('/api/mood-comparison', verifyTokenStaff, (req, res) => {
+    const query = `
+        SELECT 
+            MONTHNAME(dr.daily_record_timestamp) AS month,
+            AVG(CASE WHEN YEAR(dr.daily_record_timestamp) = YEAR(CURDATE()) - 1 THEN m.mood_score END) AS lastYearMood,
+            AVG(CASE WHEN YEAR(dr.daily_record_timestamp) = YEAR(CURDATE()) THEN m.mood_score END) AS thisYearMood
+        FROM daily_record dr
+        JOIN moods m ON dr.mood_id = m.mood_id
+        WHERE YEAR(dr.daily_record_timestamp) IN (YEAR(CURDATE()) - 1, YEAR(CURDATE()))
+        GROUP BY MONTH(dr.daily_record_timestamp), MONTHNAME(dr.daily_record_timestamp)
+        ORDER BY MONTH(dr.daily_record_timestamp);
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Error fetching mood comparison data:', err);
+            return res.status(500).json({ message: 'Failed to fetch mood comparison data' });
+        }
+
+        res.json(results);
     });
 });
 
