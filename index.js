@@ -1580,32 +1580,65 @@ ORDER BY date ASC
     });
 });
 
-
-
 app.get('/api/students', verifyTokenStaff, async (req, res) => {
     try {
+        const { course_name, academic_year, search, sort_by, order } = req.query;
 
+        let whereClauses = [];
+        let orderByClause = '';
+
+        // Add filters
+        if (course_name) {
+            whereClauses.push(`c.course_name = ${db.escape(course_name)}`);
+        }
+        if (academic_year) {
+            whereClauses.push(`ay.academic_year_name = ${db.escape(academic_year)}`);
+        }
+        if (search) {
+            whereClauses.push(`
+                (s.student_name LIKE ${db.escape('%' + search + '%')} 
+                OR s.student_number LIKE ${db.escape('%' + search + '%')}
+                OR c.course_name LIKE ${db.escape('%' + search + '%')}
+                OR ay.academic_year_name LIKE ${db.escape('%' + search + '%')})
+            `);
+        }
+
+        // Add sorting
+        if (sort_by) {
+            orderByClause = `ORDER BY ${sort_by}`;
+            if (order && (order === 'asc' || order === 'desc')) {
+                orderByClause += ` ${order.toUpperCase()}`;
+            }
+        }
+
+        // Build the query
         const studentsQuery = `
-        SELECT 
-            s.student_id, 
-            s.student_name, 
-            s.student_number, 
-            COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date
-        FROM student s
-        LEFT JOIN daily_record dr ON s.student_id = dr.student_id
-        LEFT JOIN quick_track qt ON s.student_id = qt.student_id
-        GROUP BY s.student_id
-    `;
+            SELECT 
+                s.student_id, 
+                s.student_name, 
+                s.student_number, 
+                COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date,
+                c.course_name,
+                ay.academic_year_name
+            FROM student s
+            LEFT JOIN daily_record dr ON s.student_id = dr.student_id
+            LEFT JOIN quick_track qt ON s.student_id = qt.student_id
+            LEFT JOIN course c ON s.course_id = c.course_id
+            LEFT JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
+            ${whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : ''}
+            GROUP BY s.student_id
+            ${orderByClause}
+        `;
         const [students] = await db.promise().query(studentsQuery);
 
         const moodTrends = await Promise.all(students.map(async (student) => {
             const statsQuery = `
-          SELECT m.mood_score, dr.daily_record_timestamp
-          FROM daily_record dr
-          JOIN moods m ON m.mood_id = dr.mood_id
-          WHERE dr.student_id = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-          ORDER BY dr.daily_record_timestamp ASC
-        `;
+                SELECT m.mood_score, dr.daily_record_timestamp
+                FROM daily_record dr
+                JOIN moods m ON m.mood_id = dr.mood_id
+                WHERE dr.student_id = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                ORDER BY dr.daily_record_timestamp ASC
+            `;
 
             const [stats] = await db.promise().query(statsQuery, [student.student_id]);
 
@@ -1619,13 +1652,13 @@ app.get('/api/students', verifyTokenStaff, async (req, res) => {
             return { ...student, moodTrend };
         });
 
-
         res.json({ students: studentsWithMood });
     } catch (error) {
         console.error('Error fetching students:', error);
         res.status(500).json({ message: 'Failed to fetch students' });
     }
 });
+
 
 app.get('/api/student-distribution', verifyTokenStaff, async (req, res) => {
     try {
@@ -2049,15 +2082,27 @@ app.post('/api/contact-staff', verifyTokenStudent, async (req, res) => {
     });
 });
 
-
-
 app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
     const studentId = req.params.student_id;
 
     try {
+        // Query to fetch student details, the next assignment's deadline, and the last assignment's deadline
         const studentQuery = `
-            SELECT s.student_name, s.student_email, s.student_number, c.course_name, ay.academic_year_name,
-            COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date
+            SELECT 
+                s.student_name, 
+                s.student_email, 
+                s.student_number, 
+                c.course_name, 
+                ay.academic_year_name,
+                COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date,
+                (SELECT MIN(a.assignment_deadline) 
+                 FROM assignment a 
+                 WHERE a.student_id = s.student_id 
+                 AND a.assignment_deadline >= CURDATE()) AS next_assignment_deadline,
+                (SELECT MAX(a.assignment_deadline) 
+                 FROM assignment a 
+                 WHERE a.student_id = s.student_id 
+                 AND a.assignment_deadline < CURDATE()) AS last_assignment_deadline
             FROM student s
             LEFT JOIN daily_record dr ON s.student_id = dr.student_id
             LEFT JOIN quick_track qt ON s.student_id = qt.student_id
@@ -2079,6 +2124,7 @@ app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) =
         res.status(500).json({ message: 'Failed to fetch student profile' });
     }
 });
+
 
 app.get('/api/weekly-averages', verifyTokenStaff, async (req, res) => {
     try {
