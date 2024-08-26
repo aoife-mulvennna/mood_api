@@ -319,8 +319,8 @@ app.post('/api/create-student', async (req, res) => {
 
                         const student_id = result.insertId;
                         const initialStreakQuery = `
-                            INSERT INTO streak (streak_value, student_id, last_record_time) 
-                            VALUES (0, ?, NOW())
+                            INSERT INTO streak (streak_value, student_id) 
+                            VALUES (0, ?)
                         `;
                         db.query(initialStreakQuery, [student_id], (err) => {
                             if (err) {
@@ -537,7 +537,7 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
 
     // Check these are not null or undefined and allow 0.
     if (mood_id == null || exercise_id == null || sleep_id == null || socialisation_id == null || productivity_score == null) {
-        return res.status(400).json({ message: 'Missing required fields' });
+        return res.status(400).json({ message: 'Please complete all fields' });
     }
 
     const today = new Date().toISOString().split('T')[0];
@@ -570,8 +570,8 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                 }
 
                 await updateTags(dailyRecordId, tags);
-                const streakResult = await updateStreak(student_id);
-                res.json({ message: 'Daily record and streak updated successfully', streakValue: streakResult.streakValue });
+         
+                // res.json({ message: 'Daily record updated successfully' });
             });
         } else {
             // Insert new record
@@ -590,7 +590,7 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                 await updateTags(dailyRecordId, tags);
                 const streakResult = await updateStreak(student_id);
 
-                res.json({ message: 'Daily record and streak added successfully', streakValue: streakResult.streakValue });
+                // res.json({ message: 'Daily record and streak added successfully', streakValue: streakResult.streakValue });
             });
         }
     });
@@ -846,7 +846,7 @@ app.post('/api/change-password', async (req, res) => {
             }
 
             if (!isMatch) {
-                res.status(401).json({ message: 'Current password is incorrect' });
+                res.status(401).json({ message: 'Incorrect current password. Try again.' });
                 return;
             }
 
@@ -2082,6 +2082,48 @@ app.post('/api/contact-staff', verifyTokenStudent, async (req, res) => {
     });
 });
 
+// app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
+//     const studentId = req.params.student_id;
+
+//     try {
+//         // Query to fetch student details, the next assignment's deadline, and the last assignment's deadline
+//         const studentQuery = `
+//             SELECT 
+//                 s.student_name, 
+//                 s.student_email, 
+//                 s.student_number, 
+//                 c.course_name, 
+//                 ay.academic_year_name,
+//                 COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date,
+//                 (SELECT MIN(a.assignment_deadline) 
+//                  FROM assignment a 
+//                  WHERE a.student_id = s.student_id 
+//                  AND a.assignment_deadline >= CURDATE()) AS next_assignment_deadline,
+//                 (SELECT MAX(a.assignment_deadline) 
+//                  FROM assignment a 
+//                  WHERE a.student_id = s.student_id 
+//                  AND a.assignment_deadline < CURDATE()) AS last_assignment_deadline
+//             FROM student s
+//             LEFT JOIN daily_record dr ON s.student_id = dr.student_id
+//             LEFT JOIN quick_track qt ON s.student_id = qt.student_id
+//             LEFT JOIN course c ON s.course_id = c.course_id
+//             LEFT JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
+//             WHERE s.student_id = ?
+//             GROUP BY s.student_id
+//         `;
+//         const [student] = await db.promise().query(studentQuery, [studentId]);
+//         console.log('Query result:', student);
+
+//         if (student.length === 0) {
+//             return res.status(404).json({ message: 'Student not found' });
+//         }
+
+//         res.json(student[0]);
+//     } catch (error) {
+//         console.error('Error fetching student profile:', error);
+//         res.status(500).json({ message: 'Failed to fetch student profile' });
+//     }
+// });
 app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
     const studentId = req.params.student_id;
 
@@ -2111,19 +2153,90 @@ app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) =
             WHERE s.student_id = ?
             GROUP BY s.student_id
         `;
-        const [student] = await db.promise().query(studentQuery, [studentId]);
-        console.log('Query result:', student);
 
-        if (student.length === 0) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
+        // Query to fetch last 30 days data and 7-day averages
+        const metricsQuery = `
+        SELECT 
+            DATE(dr.daily_record_timestamp) AS date,
+            ROUND(AVG(m.mood_score), 1) AS avg_mood,
+            ROUND(AVG(e.exercise_score), 1) AS avg_exercise,
+            ROUND(AVG(sl.sleep_score), 1) AS avg_sleep,
+            ROUND(AVG(social.socialisation_score), 1) AS avg_socialisation,
+            ROUND(AVG(dr.productivity_score), 1) AS avg_productivity,
+            ROUND(AVG(
+                (SELECT AVG(m2.mood_score)
+                FROM daily_record dr2
+                LEFT JOIN moods m2 ON dr2.mood_id = m2.mood_id
+                WHERE dr2.student_id = dr.student_id
+                AND DATE(dr2.daily_record_timestamp) BETWEEN DATE(dr.daily_record_timestamp) - INTERVAL 6 DAY AND DATE(dr.daily_record_timestamp))
+            ), 1) AS avg_mood_7_day,
+            ROUND(AVG(
+                (SELECT AVG(e2.exercise_score)
+                FROM daily_record dr2
+                LEFT JOIN exercise e2 ON dr2.exercise_id = e2.exercise_id
+                WHERE dr2.student_id = dr.student_id
+                AND DATE(dr2.daily_record_timestamp) BETWEEN DATE(dr.daily_record_timestamp) - INTERVAL 6 DAY AND DATE(dr.daily_record_timestamp))
+            ), 1) AS avg_exercise_7_day,
+            ROUND(AVG(
+                (SELECT AVG(sl2.sleep_score)
+                FROM daily_record dr2
+                LEFT JOIN sleep sl2 ON dr2.sleep_id = sl2.sleep_id
+                WHERE dr2.student_id = dr.student_id
+                AND DATE(dr2.daily_record_timestamp) BETWEEN DATE(dr.daily_record_timestamp) - INTERVAL 6 DAY AND DATE(dr.daily_record_timestamp))
+            ), 1) AS avg_sleep_7_day,
+            ROUND(AVG(
+                (SELECT AVG(social2.socialisation_score)
+                FROM daily_record dr2
+                LEFT JOIN socialisation social2 ON dr2.socialisation_id = social2.socialisation_id
+                WHERE dr2.student_id = dr.student_id
+                AND DATE(dr2.daily_record_timestamp) BETWEEN DATE(dr.daily_record_timestamp) - INTERVAL 6 DAY AND DATE(dr.daily_record_timestamp))
+            ), 1) AS avg_socialisation_7_day,
+            ROUND(AVG(
+                (SELECT AVG(dr2.productivity_score)
+                FROM daily_record dr2
+                WHERE dr2.student_id = dr.student_id
+                AND DATE(dr2.daily_record_timestamp) BETWEEN DATE(dr.daily_record_timestamp) - INTERVAL 6 DAY AND DATE(dr.daily_record_timestamp))
+            ), 1) AS avg_productivity_7_day
+        FROM daily_record dr
+        LEFT JOIN moods m ON dr.mood_id = m.mood_id
+        LEFT JOIN exercise e ON dr.exercise_id = e.exercise_id
+        LEFT JOIN sleep sl ON dr.sleep_id = sl.sleep_id
+        LEFT JOIN socialisation social ON dr.socialisation_id = social.socialisation_id
+        WHERE dr.student_id = ? 
+        AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+        GROUP BY DATE(dr.daily_record_timestamp), dr.student_id
+        ORDER BY DATE(dr.daily_record_timestamp) ASC
+    `;
+    
+    
+    const [metrics] = await db.promise().query(metricsQuery, [studentId]);
+    const [student] = await db.promise().query(studentQuery, [studentId]);
 
-        res.json(student[0]);
+    console.log('metrics:', metrics);
+    if (student.length === 0) {
+        return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Assuming metrics might be empty
+    if (metrics.length > 0) {
+        student[0].avg_mood_7_day = metrics[metrics.length - 1].avg_mood_7_day || null;
+        student[0].avg_exercise_7_day = metrics[metrics.length - 1].avg_exercise_7_day || null;
+        student[0].avg_sleep_7_day = metrics[metrics.length - 1].avg_sleep_7_day || null;
+        student[0].avg_socialisation_7_day = metrics[metrics.length - 1].avg_socialisation_7_day || null;
+        student[0].avg_productivity_7_day = metrics[metrics.length - 1].avg_productivity_7_day || null;
+    }
+
+    res.json({
+        ...student[0],
+        metrics, // Include the metrics data in the response
+    });
     } catch (error) {
         console.error('Error fetching student profile:', error);
         res.status(500).json({ message: 'Failed to fetch student profile' });
     }
 });
+
+
 
 
 app.get('/api/weekly-averages', verifyTokenStaff, async (req, res) => {
@@ -2470,9 +2583,9 @@ app.get('/api/student-insights/:student_id', verifyTokenStudent, async (req, res
 
             const generateInsight = (metric, label) => {
                 if (averagesCurrentWeek[metric] > averagesPreviousWeek[metric]) {
-                    insights.push(`Great job! Your ${label} has improved this week. Keep it up!`);
+                    insights.push(`Great job! Your ${label} is better this week than last week! Keep it up!`);
                 } else if (averagesCurrentWeek[metric] < averagesPreviousWeek[metric]) {
-                    insights.push(`We've noticed a decline in your ${label} this week. Consider focusing on improving it.`);
+                    insights.push(`Your ${label} has decreased this week compared to last. Consider focusing on improving it.`);
                 }
             };
 
@@ -2735,102 +2848,6 @@ app.get('/api/mood-comparison', verifyTokenStaff, (req, res) => {
     });
 });
 
-// app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) => {
-//     try {
-//            // Step 1: Identify tags that meet the 75% threshold for each cohort
-//            const tagsQuery = `
-//            SELECT 
-//                s.course_id,
-//                s.course_year_id,
-//                t.tag_name,
-//                COUNT(DISTINCT s.student_id) as student_count_with_tag,
-//                (SELECT COUNT(DISTINCT s2.student_id)
-//                 FROM student s2
-//                 WHERE s2.course_id = s.course_id
-//                 AND s2.course_year_id = s.course_year_id) as total_students
-//            FROM daily_record dr
-//            JOIN student s ON s.student_id = dr.student_id
-//            JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
-//            JOIN tag t ON t.tag_id = drt.tag_id
-//            WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-//            GROUP BY s.course_id, s.course_year_id, t.tag_name
-//            HAVING student_count_with_tag >= (total_students * 0.75);
-//        `;
-
-//        const [tagsResults] = await db.promise().query(tagsQuery);
-
-//         // Query to check all students who have an average mood score below 3 in the last 7 days
-//         const concerningQuery = `
-//         SELECT 
-//             s.course_id, 
-//             s.course_year_id,
-//             c.course_name,
-//             ay.academic_year_name,
-//             AVG(m.mood_score) as avg_mood,
-//             AVG(e.exercise_score) as avg_exercise,
-//             AVG(sl.sleep_score) as avg_sleep,
-//             AVG(soc.socialisation_score) as avg_socialisation,
-//             AVG(dr.productivity_score) as avg_productivity,
-//             COUNT(DISTINCT s.student_id) as student_count,
-//             GROUP_CONCAT(DISTINCT t.tag_name ORDER BY t.tag_name ASC) as logged_tags
-//         FROM daily_record dr
-//         JOIN student s ON s.student_id = dr.student_id
-//         JOIN course c ON c.course_id = s.course_id
-//         JOIN academic_year ay ON ay.academic_year_id = s.course_year_id
-//         JOIN moods m ON dr.mood_id = m.mood_id
-//         LEFT JOIN exercise e ON dr.exercise_id = e.exercise_id
-//         LEFT JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-//         LEFT JOIN socialisation soc ON dr.socialisation_id = soc.socialisation_id
-//         LEFT JOIN assignment a ON s.student_id = a.student_id
-//         LEFT JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
-//         LEFT JOIN tag t ON t.tag_id = drt.tag_id
-//         WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-//         GROUP BY s.course_id, s.course_year_id
-//         HAVING avg_mood < 3
-//            OR avg_exercise < 2
-//            OR avg_sleep < 2
-//            OR avg_socialisation < 2
-//            OR avg_productivity < 2
-//            OR logged_tags IS NOT NULL
-//         ORDER BY avg_mood ASC;
-//     `;
-
-//         const [results] = await db.promise().query(concerningQuery);
-
-//         if (results.length === 0) {
-//             return res.json({ isConcerning: false });
-//         }
-
-//         // Step 3: Combine results with the tags identified
-//         const concerningCohorts = results.map(result => {
-//             const matchingTags = tagsResults
-//                 .filter(tagResult => tagResult.course_id === result.course_id && tagResult.course_year_id === result.course_year_id)
-//                 .map(tagResult => tagResult.tag_name);
-
-//             return {
-//                 courseName: result.course_name,
-//                 academicYear: result.academic_year_name,
-//                 avgMood: result.avg_mood,
-//                 avgExercise: result.avg_exercise,
-//                 avgSleep: result.avg_sleep,
-//                 avgSocialisation: result.avg_socialisation,
-//                 avgProductivity: result.avg_productivity,
-//                 studentCount: result.student_count,
-//                 earliestAssignment: result.earliestAssignment,
-//                 loggedTags: result.logged_tags ? result.logged_tags.split(',') : [],
-//                 frequentTags: matchingTags
-//             };
-//         });
-//         res.json({
-//             isConcerning: true,
-//             concerningCohorts,
-//         });
-//     } catch (error) {
-//         console.error('Error identifying concerning cohorts:', error);
-//         res.status(500).json({ message: 'Failed to identify concerning cohorts' });
-//     }
-// });
-
 app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) => {
     try {
         // Step 1: Identify tags that meet the 75% threshold for each cohort
@@ -2894,28 +2911,28 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
 
         // Step 3: Fetch the earliest assignment for each cohort
         const concerningCohorts = results
-        .map(result => {
-            const matchingTags = tagsResults
-                .filter(tagResult => tagResult.course_id === result.course_id && tagResult.course_year_id === result.course_year_id)
-                .map(tagResult => tagResult.tag_name);
+            .map(result => {
+                const matchingTags = tagsResults
+                    .filter(tagResult => tagResult.course_id === result.course_id && tagResult.course_year_id === result.course_year_id)
+                    .map(tagResult => tagResult.tag_name);
 
-            // If there are no frequent tags, skip this cohort
-            if (matchingTags.length === 0) return null;
+                // If there are no frequent tags, skip this cohort
+                if (matchingTags.length === 0) return null;
 
-            return {
-                courseName: result.course_name,
-                academicYear: result.academic_year_name,
-                avgMood: result.avg_mood,
-                avgExercise: result.avg_exercise,
-                avgSleep: result.avg_sleep,
-                avgSocialisation: result.avg_socialisation,
-                avgProductivity: result.avg_productivity,
-                studentCount: result.student_count,
-                earliestAssignment: result.earliestAssignment,
-                frequentTags: matchingTags
-            };
-        })
-        .filter(cohort => cohort !== null);  // Remove any cohorts that were skipped
+                return {
+                    courseName: result.course_name,
+                    academicYear: result.academic_year_name,
+                    avgMood: result.avg_mood,
+                    avgExercise: result.avg_exercise,
+                    avgSleep: result.avg_sleep,
+                    avgSocialisation: result.avg_socialisation,
+                    avgProductivity: result.avg_productivity,
+                    studentCount: result.student_count,
+                    earliestAssignment: result.earliestAssignment,
+                    frequentTags: matchingTags
+                };
+            })
+            .filter(cohort => cohort !== null);  // Remove any cohorts that were skipped
 
         res.json({
             isConcerning: concerningCohorts.length > 0,
@@ -2927,6 +2944,24 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
     }
 });
 
+app.post('/api/add-course', verifyTokenStaff, (req, res) => {
+    const { course_name } = req.body;
+  
+    if (!course_name) {
+      return res.status(400).json({ message: 'Course name is required' });
+    }
+  
+    const query = 'INSERT INTO course (course_name) VALUES (?)';
+  
+    db.query(query, [course_name], (err, results) => {
+      if (err) {
+        console.error('Error inserting course:', err);
+        return res.status(500).json({ message: 'Failed to add course' });
+      }
+      res.status(201).json({ message: 'Course added successfully' });
+    });
+  });
+  
 
 app.listen(8000, () => {
     console.log('server is running on port 8000')
