@@ -1629,6 +1629,7 @@ app.get('/api/students', verifyTokenStaff, async (req, res) => {
             GROUP BY s.student_id
             ${orderByClause}
         `;
+
         const [students] = await db.promise().query(studentsQuery);
 
         const moodTrends = await Promise.all(students.map(async (student) => {
@@ -1639,11 +1640,8 @@ app.get('/api/students', verifyTokenStaff, async (req, res) => {
                 WHERE dr.student_id = ? AND dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
                 ORDER BY dr.daily_record_timestamp ASC
             `;
-
             const [stats] = await db.promise().query(statsQuery, [student.student_id]);
-
             const moodTrend = stats.length < 2 ? null : calculateTrend(stats, 'mood_score');
-
             return { studentId: student.student_id, moodTrend };
         }));
 
