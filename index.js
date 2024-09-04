@@ -116,9 +116,8 @@ cron.schedule('0 0 * * *', async () => {
                 const emailHtml = `
                     <p>Dear Staff,</p>
                     <p>Student ${student_name} has not recorded any activities in the last 14 days. Please follow up with them.</p>
-                    <p><a href="${process.env.FRONTEND_URL}/write-email/${student_id}" style="display: inline-block; padding: 10px 20px; font-size: 16px; color: white; background-color: blue; text-decoration: none; border-radius: 5px;">Write Email</a></p>
                     <p>Best regards,</p>
-                    <p>Your Wellness App Team</p>
+                    <p>QUB Student Pulse</p>
                 `;
                 sendEmail(staff_email, 'Student Activity Alert', emailMessage, emailHtml);
             }
@@ -191,8 +190,8 @@ cron.schedule('0 0 * * *', async () => {
                 const emailHtml = `
                     <p>Dear Staff,</p>
                     <p>Student ${student_name} has an average mood score of less than 2 over the past 7 days. Please check in with them to ensure they are okay and offer any necessary support.</p>
-                    <p>Best regards,</p>
-                    <p>The Student Pulse Team</p>
+                      <p>Best regards,</p>
+                    <p>QUB Student Pulse</p>
                 `;
                 sendEmail(staff_email, 'Student Low Mood Alert', emailMessage, emailHtml);
             }
@@ -304,7 +303,6 @@ app.post('/api/create-student', async (req, res) => {
                     }
 
                     const year_id = yearResult[0].academic_year_id;
-
                     // Step 3: Insert the student into the database
                     const insertQuery = `
                 INSERT INTO student (student_number, student_name, date_of_birth, student_email, course_id, course_year_id, student_password) 
@@ -329,12 +327,11 @@ app.post('/api/create-student', async (req, res) => {
                                 return;
                             }
                             const emailMessage = `Hello ${student_name},\n\nYour account has been successfully created. Welcome!`;
-                            const loginLink = `${process.env.FRONTEND_URL}/login`; // Link to the login page
+                            const loginLink = `${process.env.FRONTEND_URL_STUDENT}/login`; // Link to the login page
                             const emailHtml = `
                                 <p>Hello ${student_name},</p>
                                 <p>Your account has been successfully created. Welcome to our platform! Click the button below to log in:</p>
                                 <a href="${loginLink}" style="display: inline-block; padding: 10px 20px; font-size: 16px; color: white; background-color: blue; text-decoration: none; border-radius: 5px;">Log In</a>
-                                <p>If you did not request this, please contact our support team.</p>
                             `;
 
                             sendEmail(student_email, 'Account Created Successfully', emailMessage, emailHtml);
@@ -365,7 +362,7 @@ app.post('/api/forgot-password', async (req, res) => {
         const user = results[0];
         const token = jwt.sign({ id: user.student_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+        const resetLink = `${process.env.FRONTEND_URL_STUDENT}/reset-password/${token}`;
         const emailMessage = `Click the following link to reset your password: ${resetLink}`;
         const emailHtml = `       
         <p>Hi ${user.student_name},</p>
@@ -534,13 +531,15 @@ app.get('/api/sleeps', (req, res) => {
 
 app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
     const { student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score, tags } = req.body;
-
+    console.log(req.body);
     // Check these are not null or undefined and allow 0.
     if (mood_id == null || exercise_id == null || sleep_id == null || socialisation_id == null || productivity_score == null) {
+
         return res.status(400).json({ message: 'Please complete all fields' });
     }
 
     const today = new Date().toISOString().split('T')[0];
+    console.log(today)
 
     const checkRecordQuery = `
         SELECT * FROM daily_record 
@@ -570,8 +569,7 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                 }
 
                 await updateTags(dailyRecordId, tags);
-         
-                // res.json({ message: 'Daily record updated successfully' });
+                res.json({ message: 'Daily Tracker updated successfully! Thank you.' });
             });
         } else {
             // Insert new record
@@ -589,10 +587,37 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                 const dailyRecordId = result.insertId;
                 await updateTags(dailyRecordId, tags);
                 const streakResult = await updateStreak(student_id);
-
-                // res.json({ message: 'Daily record and streak added successfully', streakValue: streakResult.streakValue });
+                res.json({ message: 'Daily record added successfully! Thank you.' });
             });
         }
+    });
+});
+
+app.get('/api/daily-track/:studentId', verifyTokenStudent, (req, res) => {
+    const studentId = req.params.studentId;
+    const today = new Date().toISOString().split('T')[0];
+console.log('today:', today);
+    const query = `
+        SELECT dr.*, GROUP_CONCAT(drt.tag_id) AS tags 
+        FROM daily_record dr
+        LEFT JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
+        WHERE dr.student_id = ? AND DATE(dr.daily_record_timestamp) = ?
+        GROUP BY dr.daily_record_id
+    `;
+
+    db.query(query, [studentId, today], (err, rows) => {
+        if (err) {
+            console.error('Error fetching daily record:', err);
+            return res.status(500).send('Failed to fetch daily record');
+        }
+
+        if (rows.length === 0) {
+            return res.status(404).send('No daily record found for today');
+        }
+
+        const record = rows[0];
+        record.tags = record.tags ? record.tags.split(',').map(Number) : [];
+        res.json(record);
     });
 });
 
@@ -630,6 +655,8 @@ const updateTags = (dailyRecordId, tags) => {
         });
     });
 };
+
+
 const updateStreak = (student_id) => {
     return new Promise((resolve, reject) => {
         const today = new Date();
@@ -650,6 +677,13 @@ const updateStreak = (student_id) => {
             LIMIT 1
         `;
 
+           // Define getCurrentStreakQuery here before using it
+           const getCurrentStreakQuery = `
+           SELECT streak_value 
+           FROM streak 
+           WHERE student_id = ?
+       `;
+
         db.query(getLastRecordQuery, [student_id], (err, lastRecords) => {
             if (err) {
                 console.error('Error fetching last record:', err);
@@ -661,12 +695,6 @@ const updateStreak = (student_id) => {
                 console.log(`Last record date: ${formatDate(lastRecordDate)}`);
 
                 if (formatDate(lastRecordDate) === formatDate(yesterday)) {
-
-                    const getCurrentStreakQuery = `
-                        SELECT streak_value 
-                        FROM streak 
-                        WHERE student_id = ?
-                    `;
 
                     db.query(getCurrentStreakQuery, [student_id], (err, streaks) => {
                         if (err) {
@@ -760,35 +788,6 @@ const updateStreak = (student_id) => {
 };
 
 
-
-
-app.get('/api/daily-track/:studentId', verifyTokenStudent, (req, res) => {
-    const studentId = req.params.studentId;
-    const today = new Date().toISOString().split('T')[0];
-
-    const query = `
-        SELECT dr.*, GROUP_CONCAT(drt.tag_id) AS tags 
-        FROM daily_record dr
-        LEFT JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
-        WHERE dr.student_id = ? AND DATE(dr.daily_record_timestamp) = ?
-        GROUP BY dr.daily_record_id
-    `;
-
-    db.query(query, [studentId, today], (err, rows) => {
-        if (err) {
-            console.error('Error fetching daily record:', err);
-            return res.status(500).send('Failed to fetch daily record');
-        }
-
-        if (rows.length === 0) {
-            return res.status(404).send('No daily record found for today');
-        }
-
-        const record = rows[0];
-        record.tags = record.tags ? record.tags.split(',').map(Number) : [];
-        res.json(record);
-    });
-});
 
 
 app.post('/api/logout', (req, res) => {
@@ -1356,108 +1355,6 @@ app.get('/api/socialisation/:student_id', verifyTokenStudent, (req, res) => {
     });
 });
 
-// app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
-//     const studentId = req.params.student_id;
-//     console.log(`Fetching stats for student ID: ${studentId}`);
-//     const today = new Date().toISOString().split('T')[0];
-
-//     const query = `
-// SELECT
-//     DATE(record_date) AS date,
-//     ROUND(AVG(mood_score), 1) AS avg_mood,
-//     ROUND(AVG(exercise_score), 1) AS avg_exercise,
-//     ROUND(AVG(sleep_score), 1) AS avg_sleep,
-//     ROUND(AVG(socialisation_score), 1) AS avg_socialisation,
-//     ROUND(AVG(productivity_score), 1) AS avg_productivity
-// FROM (
-//     SELECT
-//         DATE(dr.daily_record_timestamp) AS record_date,
-//         m.mood_score,
-//         e.exercise_score,
-//         sl.sleep_score,
-//         s.socialisation_score,
-//         dr.productivity_score
-//     FROM daily_record dr
-//     JOIN moods m ON m.mood_id = dr.mood_id
-//     JOIN exercise e ON e.exercise_id = dr.exercise_id
-//     JOIN sleep sl ON sl.sleep_id = dr.sleep_id
-//     JOIN socialisation s ON s.socialisation_id = dr.socialisation_id
-//     WHERE dr.student_id = ?
-
-//     UNION ALL
-
-//     SELECT
-//         DATE(qt.quick_track_timestamp) AS record_date,
-//         m.mood_score,
-//         NULL AS exercise_score,
-//         NULL AS sleep_score,
-//         NULL AS socialisation_score,
-//         NULL AS productivity_score
-//     FROM quick_track qt
-//     JOIN moods m ON m.mood_id = qt.mood_id
-//     WHERE qt.student_id = ?
-// ) AS combined
-// GROUP BY date
-// HAVING date = CURDATE()
-// ORDER BY date ASC;`;
-
-//     db.query(query, [studentId, studentId], (err, results) => {
-//         if (err) {
-//             console.error('Error fetching stats:', err);
-//             return res.status(500).json({ message: 'Failed to fetch stats' });
-//         }
-//         console.log('SQL Query Results:', results);
-
-//         // Ensure the average calculation only includes logged days
-//         const calculateAverage = (data, key) => {
-//             if (data.length === 0) {
-//                 return NaN;
-//             }
-//             const sum = data.reduce((acc, record) => acc + parseFloat(record[key] || 0), 0);
-//             const average = (sum / data.length).toFixed(1);
-
-//             return average;
-//         };
-
-//         const averages = {
-//             mood: calculateAverage(results, 'avg_mood'),
-//             exercise: calculateAverage(results, 'avg_exercise'),
-//             sleep: calculateAverage(results, 'avg_sleep'),
-//             socialisation: calculateAverage(results, 'avg_socialisation'),
-//             productivity: calculateAverage(results, 'avg_productivity'),
-//         };
-
-//         const todayRecord = results.find(record => record.date === today) || {
-//             avg_mood: '-',
-//             avg_exercise: '-',
-//             avg_sleep: '-',
-//             avg_socialisation: '-',
-//             avg_productivity: '-',
-//         };
-
-//         console.log('Today\'s record:', todayRecord);
-//         console.log('Averages for the last 7 days:', averages);
-//         const stats = {
-//             today: {
-//                 mood: todayRecord.avg_mood !== null ? todayRecord.avg_mood : '-',  // Handling for null values
-//                 exercise: todayRecord.avg_exercise !== null ? todayRecord.avg_exercise : '-',
-//                 sleep: todayRecord.avg_sleep !== null ? todayRecord.avg_sleep : '-',
-//                 socialisation: todayRecord.avg_socialisation !== null ? todayRecord.avg_socialisation : '-',
-//                 productivity: todayRecord.avg_productivity !== null ? todayRecord.avg_productivity : '-',
-//             },
-//             averages: averages,
-//             trends: {
-//                 mood: (todayRecord.avg_mood !== null ? parseFloat(todayRecord.avg_mood) : 0) - averages.mood,
-//                 exercise: (todayRecord.avg_exercise !== null ? parseFloat(todayRecord.avg_exercise) : 0) - averages.exercise,
-//                 sleep: (todayRecord.avg_sleep !== null ? parseFloat(todayRecord.avg_sleep) : 0) - averages.sleep,
-//                 socialisation: (todayRecord.avg_socialisation !== null ? parseFloat(todayRecord.avg_socialisation) : 0) - averages.socialisation,
-//                 productivity: (todayRecord.avg_productivity !== null ? parseFloat(todayRecord.avg_productivity) : 0) - averages.productivity,
-//             },
-//         };   
-// console.log('Stats:',stats)
-//         res.json({ stats });
-//     });
-// });
 app.get('/api/stats/:student_id', verifyTokenStudent, (req, res) => {
     const studentId = req.params.student_id;
     // console.log(`Fetching stats for student ID: ${studentId}`);
@@ -1642,12 +1539,17 @@ app.get('/api/students', verifyTokenStaff, async (req, res) => {
             `;
             const [stats] = await db.promise().query(statsQuery, [student.student_id]);
             const moodTrend = stats.length < 2 ? null : calculateTrend(stats, 'mood_score');
-            return { studentId: student.student_id, moodTrend };
+            const moodAverage = stats.length === 0 ? null : stats.reduce((acc, curr) => acc + curr.mood_score, 0) / stats.length;
+
+            return { studentId: student.student_id, moodTrend, moodAverage };
         }));
 
         const studentsWithMood = students.map((student) => {
-            const moodTrend = moodTrends.find((trend) => trend.studentId === student.student_id)?.moodTrend || 'no record';
-            return { ...student, moodTrend };
+            const moodData = moodTrends.find((trend) => trend.studentId === student.student_id);
+            return {
+                ...student, moodTrend: moodData?.moodTrend || 'no record',
+                moodAverage: moodData?.moodAverage || 'no record'
+            };
         });
 
         res.json({ students: studentsWithMood });
@@ -1896,8 +1798,8 @@ app.post('/api/staff-resources', verifyTokenStaff, (req, res) => {
 // Update a resource
 app.put('/api/staff-resources/:resource_id', verifyTokenStaff, (req, res) => {
     const { resource_id } = req.params;
-    const { resource_name, resource_link } = req.body;
-    db.query('UPDATE resources SET resource_name = ?, resource_link = ? WHERE resource_id = ?', [resource_name, resource_link, resource_id], (err) => {
+    const { resource_name, resource_link, resource_topic_id } = req.body;
+    db.query('UPDATE resources SET resource_name = ?, resource_link = ?, resource_topic_id = ? WHERE resource_id = ?', [resource_name, resource_link, resource_topic_id, resource_id], (err) => {
         if (err) {
             console.error('Error updating resource:', err);
             return res.status(500).json({ message: 'Failed to update resource' });
@@ -2080,48 +1982,6 @@ app.post('/api/contact-staff', verifyTokenStudent, async (req, res) => {
     });
 });
 
-// app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
-//     const studentId = req.params.student_id;
-
-//     try {
-//         // Query to fetch student details, the next assignment's deadline, and the last assignment's deadline
-//         const studentQuery = `
-//             SELECT 
-//                 s.student_name, 
-//                 s.student_email, 
-//                 s.student_number, 
-//                 c.course_name, 
-//                 ay.academic_year_name,
-//                 COALESCE(MAX(dr.daily_record_timestamp), MAX(qt.quick_track_timestamp)) AS last_recording_date,
-//                 (SELECT MIN(a.assignment_deadline) 
-//                  FROM assignment a 
-//                  WHERE a.student_id = s.student_id 
-//                  AND a.assignment_deadline >= CURDATE()) AS next_assignment_deadline,
-//                 (SELECT MAX(a.assignment_deadline) 
-//                  FROM assignment a 
-//                  WHERE a.student_id = s.student_id 
-//                  AND a.assignment_deadline < CURDATE()) AS last_assignment_deadline
-//             FROM student s
-//             LEFT JOIN daily_record dr ON s.student_id = dr.student_id
-//             LEFT JOIN quick_track qt ON s.student_id = qt.student_id
-//             LEFT JOIN course c ON s.course_id = c.course_id
-//             LEFT JOIN academic_year ay ON s.course_year_id = ay.academic_year_id
-//             WHERE s.student_id = ?
-//             GROUP BY s.student_id
-//         `;
-//         const [student] = await db.promise().query(studentQuery, [studentId]);
-//         console.log('Query result:', student);
-
-//         if (student.length === 0) {
-//             return res.status(404).json({ message: 'Student not found' });
-//         }
-
-//         res.json(student[0]);
-//     } catch (error) {
-//         console.error('Error fetching student profile:', error);
-//         res.status(500).json({ message: 'Failed to fetch student profile' });
-//     }
-// });
 app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) => {
     const studentId = req.params.student_id;
 
@@ -2205,29 +2065,29 @@ app.get('/api/student-profile/:student_id', verifyTokenStaff, async (req, res) =
         GROUP BY DATE(dr.daily_record_timestamp), dr.student_id
         ORDER BY DATE(dr.daily_record_timestamp) ASC
     `;
-    
-    
-    const [metrics] = await db.promise().query(metricsQuery, [studentId]);
-    const [student] = await db.promise().query(studentQuery, [studentId]);
 
-    console.log('metrics:', metrics);
-    if (student.length === 0) {
-        return res.status(404).json({ message: 'Student not found' });
-    }
 
-    // Assuming metrics might be empty
-    if (metrics.length > 0) {
-        student[0].avg_mood_7_day = metrics[metrics.length - 1].avg_mood_7_day || null;
-        student[0].avg_exercise_7_day = metrics[metrics.length - 1].avg_exercise_7_day || null;
-        student[0].avg_sleep_7_day = metrics[metrics.length - 1].avg_sleep_7_day || null;
-        student[0].avg_socialisation_7_day = metrics[metrics.length - 1].avg_socialisation_7_day || null;
-        student[0].avg_productivity_7_day = metrics[metrics.length - 1].avg_productivity_7_day || null;
-    }
+        const [metrics] = await db.promise().query(metricsQuery, [studentId]);
+        const [student] = await db.promise().query(studentQuery, [studentId]);
 
-    res.json({
-        ...student[0],
-        metrics, // Include the metrics data in the response
-    });
+        console.log('metrics:', metrics);
+        if (student.length === 0) {
+            return res.status(404).json({ message: 'Student not found' });
+        }
+
+        // Assuming metrics might be empty
+        if (metrics.length > 0) {
+            student[0].avg_mood_7_day = metrics[metrics.length - 1].avg_mood_7_day || null;
+            student[0].avg_exercise_7_day = metrics[metrics.length - 1].avg_exercise_7_day || null;
+            student[0].avg_sleep_7_day = metrics[metrics.length - 1].avg_sleep_7_day || null;
+            student[0].avg_socialisation_7_day = metrics[metrics.length - 1].avg_socialisation_7_day || null;
+            student[0].avg_productivity_7_day = metrics[metrics.length - 1].avg_productivity_7_day || null;
+        }
+
+        res.json({
+            ...student[0],
+            metrics, // Include the metrics data in the response
+        });
     } catch (error) {
         console.error('Error fetching student profile:', error);
         res.status(500).json({ message: 'Failed to fetch student profile' });
@@ -2629,9 +2489,6 @@ app.get('/api/student-insights/:student_id', verifyTokenStudent, async (req, res
             insights.push("Not enough data to generate weekly insights. Please keep tracking your activities.");
         }
 
-        // Log final insights
-        // console.log("Generated Insights:", insights);
-
         res.json({ insights });
     } catch (error) {
         console.error('Error generating student insights:', error);
@@ -2944,22 +2801,65 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
 
 app.post('/api/add-course', verifyTokenStaff, (req, res) => {
     const { course_name } = req.body;
-  
+
     if (!course_name) {
-      return res.status(400).json({ message: 'Course name is required' });
+        return res.status(400).json({ message: 'Course name is required' });
     }
-  
+
     const query = 'INSERT INTO course (course_name) VALUES (?)';
-  
+
     db.query(query, [course_name], (err, results) => {
-      if (err) {
-        console.error('Error inserting course:', err);
-        return res.status(500).json({ message: 'Failed to add course' });
-      }
-      res.status(201).json({ message: 'Course added successfully' });
+        if (err) {
+            console.error('Error inserting course:', err);
+            return res.status(500).json({ message: 'Failed to add course' });
+        }
+        res.status(201).json({ message: 'Course added successfully' });
     });
-  });
-  
+});
+
+app.get('/api/student-aggregated-data/:student_id', verifyTokenStaff, (req, res) => {
+    const { metrics } = req.query;
+    const { student_id } = req.params;
+
+    let baseQuery = `
+        SELECT dr.daily_record_timestamp,
+    `;
+    let joins = `
+        FROM daily_record dr
+        JOIN student st ON st.student_id = dr.student_id
+    `;
+    let conditions = `WHERE st.student_id = ${student_id}`;  // Filter by student_id
+
+    // Map metrics to their corresponding fields
+    const metricsMap = {
+        mood: 'm.mood_score',
+        exercise: 'e.exercise_score',
+        sleep: 'sl.sleep_score',
+        socialisation: 's.socialisation_score',
+        productivity: 'dr.productivity_score',
+    };
+
+    metrics.split(',').forEach(metric => {
+        baseQuery += `${metricsMap[metric]}, `;
+        if (metric === 'mood') joins += `JOIN moods m ON m.mood_id = dr.mood_id `;
+        if (metric === 'socialisation') joins += `JOIN socialisation s ON s.socialisation_id = dr.socialisation_id `;
+        if (metric === 'exercise') joins += `JOIN exercise e ON e.exercise_id = dr.exercise_id `;
+        if (metric === 'sleep') joins += `JOIN sleep sl ON sl.sleep_id = dr.sleep_id `;
+    });
+
+    // Finalize the query
+    const finalQuery = `${baseQuery.slice(0, -2)} ${joins} ${conditions} ORDER BY dr.daily_record_timestamp ASC`;
+
+    db.query(finalQuery, (err, results) => {
+        if (err) {
+            console.error('Error fetching student aggregated data:', err);
+            return res.status(500).json({ message: 'Failed to fetch student aggregated data' });
+        }
+
+        return res.json({ data: results });
+    });
+});
+
 
 app.listen(8000, () => {
     console.log('server is running on port 8000')
