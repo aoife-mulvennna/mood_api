@@ -6,20 +6,17 @@ const db = require('../db'); // Ensure this uses the mysql2/promise module
 // Function to import data into daily_record table
 const importDailyRecord = async (csvFilePath) => {
     const records = [];
-    const idMap = {}; // To map conditions to generated daily_record_ids
-
+    const idMap = {}; 
     await new Promise((resolve, reject) => {
         fs.createReadStream(csvFilePath)
             .pipe(csv())
             .on('data', (data) => {
-                // Ensure no null values for productivity_score
-                const productivity_score = data.productivity_score ? data.productivity_score : 1; // Default to 1 if null
+                const productivity_score = data.productivity_score ? data.productivity_score : 1;
                 records.push({ ...data, productivity_score });
             })
             .on('end', resolve)
             .on('error', reject);
     });
-
     for (const record of records) {
         const { daily_record_timestamp, student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score } = record;
         try {
@@ -28,38 +25,29 @@ const importDailyRecord = async (csvFilePath) => {
                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [daily_record_timestamp, student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score]
             );
-
-            const generatedId = result.insertId; // Get the generated daily_record_id
-            // Map the generated ID to the conditions
+            const generatedId = result.insertId; 
             idMap[generatedId] = { mood_id, exercise_id, sleep_id, socialisation_id };
 
         } catch (error) {
             console.error('Error inserting into daily_record:', error);
         }
     }
-
     console.log('Daily records imported successfully');
-    return idMap; // Return the mapping of generated IDs to conditions
+    return idMap; 
 };
 
 // Function to generate and import data into daily_record_tag table
 const generateAndImportDailyRecordTag = async (idMap) => {
     const dailyTrackTagData = [];
-
-    // Define conditions for tagging
     const tagsMapping = {
-        "low_mood": [1, 6, 2, 3],  // Stressed, Grieving, Lonely
-        "high_mood": [],        // No tags
-        "poor_sleep": [1, 6, 2, 3],   // Stressed, Lonely
-        "low_exercise": [6, 2, 3], // Lonely, Grieving
-        "social_isolation": [6, 7]  // Lonely, Grieving
+        "low_mood": [1, 6, 2, 3], 
+        "high_mood": [],      
+        "poor_sleep": [1, 6, 2, 3],  
+        "low_exercise": [6, 2, 3], 
+        "social_isolation": [6, 7]  
     };
-
-    // Generate the tag entries based on the imported records
     for (const [daily_record_id, factors] of Object.entries(idMap)) {
         let associatedTags = [];
-
-        // Apply tagging logic
         if (factors.mood_id === 15 || factors.mood_id === 18) { // Sad or Discontent
             associatedTags = associatedTags.concat(tagsMapping['low_mood']);
         }
@@ -72,11 +60,7 @@ const generateAndImportDailyRecordTag = async (idMap) => {
         if (factors.socialisation_id === 0 || factors.socialisation_id === 1) { // Low Socialisation
             associatedTags = associatedTags.concat(tagsMapping['social_isolation']);
         }
-
-        // Remove duplicates
         associatedTags = [...new Set(associatedTags)];
-
-        // Create daily_record_tag entries
         associatedTags.forEach(tag_id => {
             dailyTrackTagData.push({
                 daily_record_id,

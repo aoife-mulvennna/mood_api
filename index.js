@@ -594,8 +594,6 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
     }
 
     const today = new Date().toISOString().split('T')[0];
-    console.log(today)
-
     const checkRecordQuery = `
         SELECT * FROM daily_record 
         WHERE student_id = ? AND DATE(daily_record_timestamp) = ?
@@ -606,11 +604,8 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
             console.error('Error checking daily record:', err);
             return res.status(500).send('Failed to check daily record');
         }
-
         if (records.length > 0) {
-            // Update existing record
             const dailyRecordId = records[0].daily_record_id;
-
             const updateQuery = `
                 UPDATE daily_record 
                 SET mood_id = ?, exercise_id = ?, sleep_id = ?, socialisation_id = ?, productivity_score = ?
@@ -627,7 +622,6 @@ app.post('/api/daily-track', verifyTokenStudent, (req, res) => {
                 res.json({ message: 'Daily Tracker updated successfully! Thank you.' });
             });
         } else {
-            // Insert new record
             const insertQuery = `
                 INSERT INTO daily_record (student_id, mood_id, exercise_id, sleep_id, socialisation_id, productivity_score) 
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -2758,117 +2752,6 @@ app.get('/api/mood-comparison', verifyTokenStaff, (req, res) => {
     });
 });
 
-// app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) => {
-//     try {
-//         // Step 1: Identify tags that meet the 75% threshold for each cohort
-//         const tagsQuery = `
-//         SELECT 
-//             s.course_id,
-//             s.course_year_id,
-//             t.tag_name,
-//             COUNT(DISTINCT s.student_id) as student_count_with_tag,
-//             (SELECT COUNT(DISTINCT s2.student_id)
-//              FROM student s2
-//              WHERE s2.course_id = s.course_id
-//              AND s2.course_year_id = s.course_year_id) as total_students
-//         FROM daily_record dr
-//         JOIN student s ON s.student_id = dr.student_id
-//         JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
-//         JOIN tag t ON t.tag_id = drt.tag_id
-//         WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-//         GROUP BY s.course_id, s.course_year_id, t.tag_name
-//         HAVING student_count_with_tag >= (total_students * 0.75);
-//      `;
-//         const [tagsResults] = await db.promise().query(tagsQuery);
-
-//         // Step 2: Query to check all students who have concerning metrics
-//         const concerningQuery = `
-//       SELECT 
-//             s.course_id, 
-//             s.course_year_id,
-//             c.course_name,
-//             ay.academic_year_name,
-//             AVG(m.mood_score) as avg_mood,
-//             AVG(e.exercise_score) as avg_exercise,
-//             AVG(sl.sleep_score) as avg_sleep,
-//             AVG(soc.socialisation_score) as avg_socialisation,
-//             AVG(dr.productivity_score) as avg_productivity,
-//             COUNT(DISTINCT s.student_id) as student_count
-//         FROM daily_record dr
-//         JOIN student s ON s.student_id = dr.student_id
-//         JOIN course c ON c.course_id = s.course_id
-//         JOIN academic_year ay ON ay.academic_year_id = s.course_year_id
-//         JOIN moods m ON dr.mood_id = m.mood_id
-//         LEFT JOIN exercise e ON dr.exercise_id = e.exercise_id
-//         LEFT JOIN sleep sl ON dr.sleep_id = sl.sleep_id
-//         LEFT JOIN socialisation soc ON dr.socialisation_id = soc.socialisation_id
-//         WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-//         GROUP BY s.course_id, s.course_year_id
-//         HAVING avg_mood < 3
-//            OR avg_exercise < 2
-//            OR avg_sleep < 2
-//            OR avg_socialisation < 2
-//            OR avg_productivity < 2;
-//     `;
-
-//         const [metricsResults] = await db.promise().query(concerningQuery);
-//         const concerningCohorts = [];
-
-//              // Process results from the concerning metrics query
-//              metricsResults.forEach(result => {
-//                 // Find any matching tags for this cohort
-//                 const matchingTags = tagsResults
-//                     .filter(tagResult => tagResult.course_id === result.course_id && tagResult.course_year_id === result.course_year_id)
-//                     .map(tagResult => tagResult.tag_name);
-    
-//                 concerningCohorts.push({
-//                     courseName: result.course_name,
-//                     academicYear: result.academic_year_name,
-//                     avgMood: result.avg_mood,
-//                     avgExercise: result.avg_exercise,
-//                     avgSleep: result.avg_sleep,
-//                     avgSocialisation: result.avg_socialisation,
-//                     avgProductivity: result.avg_productivity,
-//                     studentCount: result.student_count,
-//                     earliestAssignment: result.earliestAssignment,  // Assume you have this field in your data
-//                     frequentTags: matchingTags.length > 0 ? matchingTags : null,  // Add frequent tags if available
-//                 });
-//             });
-//                     // Process additional results from the tags query that might not be in metrics results
-//         tagsResults.forEach(tagResult => {
-//             // Check if this cohort has already been added from the metrics results
-//             const existingCohort = concerningCohorts.find(cohort =>
-//                 cohort.course_id === tagResult.course_id &&
-//                 cohort.course_year_id === tagResult.course_year_id
-//             );
-
-//             // If this cohort is not already in the list, add it
-//             if (!existingCohort) {
-//                 concerningCohorts.push({
-//                     courseName: tagResult.course_name,
-//                     academicYear: tagResult.academic_year_name,
-//                     avgMood: null,  // No metrics data for this cohort
-//                     avgExercise: null,
-//                     avgSleep: null,
-//                     avgSocialisation: null,
-//                     avgProductivity: null,
-//                     studentCount: tagResult.student_count_with_tag,
-//                     earliestAssignment: null,  // This may need to be queried separately
-//                     frequentTags: [tagResult.tag_name],
-//                 });
-//             }
-//         });
-
-//         res.json({
-//             isConcerning: concerningCohorts.length > 0,
-//             concerningCohorts,
-//         });
-//     } catch (error) {
-//         console.error('Error identifying concerning cohorts:', error);
-//         res.status(500).json({ message: 'Failed to identify concerning cohorts' });
-//     }
-// });
-
 app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) => {
     try {
         // Step 1: Identify cohorts with concerning metrics (mood < 3, other metrics < 2)
@@ -2928,7 +2811,7 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
         JOIN course c ON c.course_id = s.course_id
         JOIN academic_year ay ON ay.academic_year_id = s.course_year_id
         GROUP BY s.course_id, s.course_year_id
-        HAVING avg_mood < 3
+        HAVING avg_mood < 2.5
            OR avg_exercise < 2
            OR avg_sleep < 2
            OR avg_socialisation < 2
@@ -2943,6 +2826,8 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
             s.course_id,
             s.course_year_id,
             t.tag_name,
+            c.course_name,
+            ay.academic_year_name,
             COUNT(DISTINCT s.student_id) as student_count_with_tag,
             (SELECT COUNT(DISTINCT s2.student_id)
              FROM student s2
@@ -2952,10 +2837,12 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
         JOIN student s ON s.student_id = dr.student_id
         JOIN daily_record_tag drt ON dr.daily_record_id = drt.daily_record_id
         JOIN tag t ON t.tag_id = drt.tag_id
+        JOIN course c ON c.course_id = s.course_id
+        JOIN academic_year ay ON ay.academic_year_id = s.course_year_id
         WHERE dr.daily_record_timestamp >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
         AND t.tag_name = 'stressed'  -- You can modify this to check for different tags as needed
         GROUP BY s.course_id, s.course_year_id, t.tag_name
-        HAVING student_count_with_tag >= (total_students * 0.1);
+        HAVING student_count_with_tag >= (total_students * 0.5);
         `;
         const [tagsResults] = await db.promise().query(tagsQuery);
 
@@ -3008,6 +2895,7 @@ app.get('/api/identify-concerning-cohorts', verifyTokenStaff, async (req, res) =
                 });
             }
         });
+        console.log(concerningCohorts);
 
         // Step 4: For each concerning cohort, check for upcoming assignments
         for (const cohort of concerningCohorts) {
