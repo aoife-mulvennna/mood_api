@@ -48,10 +48,10 @@ const generateAndImportDailyRecordTag = async (idMap) => {
 
     // Define conditions for tagging
     const tagsMapping = {
-        "low_mood": [1, 7, 6],  // Stressed, Grieving, Lonely
+        "low_mood": [1, 6, 2, 3],  // Stressed, Grieving, Lonely
         "high_mood": [],        // No tags
-        "poor_sleep": [1, 6],   // Stressed, Lonely
-        "low_exercise": [6, 7], // Lonely, Grieving
+        "poor_sleep": [1, 6, 2, 3],   // Stressed, Lonely
+        "low_exercise": [6, 2, 3], // Lonely, Grieving
         "social_isolation": [6, 7]  // Lonely, Grieving
     };
 
